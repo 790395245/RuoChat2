@@ -1,0 +1,316 @@
+import logging
+from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+from django.db.models import Q
+from django.utils import timezone
+
+logger = logging.getLogger(__name__)
+
+
+class ContextService:
+    """上下文检索和聚合服务 - Vertical Container实现"""
+
+    def get_user_message_context(self, sender: str, limit: int = 10) -> Dict:
+        """
+        获取用户消息处理所需的上下文
+
+        Args:
+            sender: 消息发送者
+            limit: 每类数据的限制数量
+
+        Returns:
+            Dict: 聚合的上下文信息
+        """
+        from core.models import MemoryLibrary, MessageRecord, PlannedTask, ReplyTask
+
+        context = {}
+
+        # 1. 检索相关记忆（根据权重和时间排序，过滤已遗忘的记忆）
+        memories = MemoryLibrary.objects.filter(
+            Q(forget_time__isnull=True) | Q(forget_time__gt=timezone.now())
+        ).order_by('-weight', '-strength')[:limit]
+
+        context['memories'] = [
+            {
+                'id': m.id,
+                'title': m.title,
+                'content': m.content,
+                'type': m.memory_type,
+                'strength': m.strength,
+                'weight': m.weight,
+            }
+            for m in memories
+        ]
+
+        # 2. 检索与该发送者的历史消息
+        recent_messages = MessageRecord.objects.filter(
+            Q(sender=sender) | Q(receiver=sender)
+        ).order_by('-timestamp')[:limit]
+
+        context['recent_messages'] = [
+            {
+                'id': m.id,
+                'type': m.message_type,
+                'sender': m.sender,
+                'receiver': m.receiver,
+                'content': m.content,
+                'timestamp': m.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for m in recent_messages
+        ]
+
+        # 3. 检索今日计划任务
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+
+        planned_tasks = PlannedTask.objects.filter(
+            scheduled_time__gte=today_start,
+            scheduled_time__lt=today_end,
+            status='pending'
+        ).order_by('scheduled_time')[:limit]
+
+        context['planned_tasks'] = [
+            {
+                'id': t.id,
+                'title': t.title,
+                'description': t.description,
+                'task_type': t.task_type,
+                'scheduled_time': t.scheduled_time.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for t in planned_tasks
+        ]
+
+        # 4. 检索待回复任务
+        reply_tasks = ReplyTask.objects.filter(
+            status='pending',
+            scheduled_time__gte=timezone.now()
+        ).order_by('scheduled_time')[:limit]
+
+        context['reply_tasks'] = [
+            {
+                'id': t.id,
+                'trigger_type': t.trigger_type,
+                'content': t.content,
+                'scheduled_time': t.scheduled_time.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for t in reply_tasks
+        ]
+
+        logger.info(f"为用户 {sender} 聚合了上下文：{len(context['memories'])}条记忆，{len(context['recent_messages'])}条消息")
+        return context
+
+    def get_daily_planning_context(self, limit: int = 20) -> Dict:
+        """
+        获取生成每日计划所需的上下文（00:00任务使用）
+
+        Args:
+            limit: 每类数据的限制数量
+
+        Returns:
+            Dict: 聚合的上下文信息
+        """
+        from core.models import MemoryLibrary, PlannedTask
+
+        context = {}
+
+        # 1. 检索高权重记忆
+        memories = MemoryLibrary.objects.filter(
+            Q(forget_time__isnull=True) | Q(forget_time__gt=timezone.now())
+        ).filter(weight__gte=5.0).order_by('-weight', '-strength')[:limit]
+
+        context['memories'] = [
+            {
+                'id': m.id,
+                'title': m.title,
+                'content': m.content,
+                'type': m.memory_type,
+                'strength': m.strength,
+                'weight': m.weight,
+            }
+            for m in memories
+        ]
+
+        # 2. 检索昨天的计划任务（作为参考）
+        yesterday_start = (datetime.now() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_end = yesterday_start + timedelta(days=1)
+
+        yesterday_tasks = PlannedTask.objects.filter(
+            scheduled_time__gte=yesterday_start,
+            scheduled_time__lt=yesterday_end
+        ).order_by('scheduled_time')[:limit]
+
+        context['yesterday_tasks'] = [
+            {
+                'id': t.id,
+                'title': t.title,
+                'description': t.description,
+                'task_type': t.task_type,
+                'status': t.status,
+            }
+            for t in yesterday_tasks
+        ]
+
+        logger.info(f"聚合每日计划上下文：{len(context['memories'])}条记忆，{len(context['yesterday_tasks'])}条昨日任务")
+        return context
+
+    def get_autonomous_message_context(self, limit: int = 20) -> Dict:
+        """
+        获取生成自主消息所需的上下文（00:05任务使用）
+
+        Args:
+            limit: 每类数据的限制数量
+
+        Returns:
+            Dict: 聚合的上下文信息
+        """
+        from core.models import MemoryLibrary, MessageRecord, PlannedTask, ReplyTask
+
+        context = {}
+
+        # 1. 检索重要记忆
+        memories = MemoryLibrary.objects.filter(
+            Q(forget_time__isnull=True) | Q(forget_time__gt=timezone.now())
+        ).filter(weight__gte=3.0).order_by('-weight', '-strength')[:limit]
+
+        context['memories'] = [
+            {
+                'id': m.id,
+                'title': m.title,
+                'content': m.content,
+                'type': m.memory_type,
+                'strength': m.strength,
+                'weight': m.weight,
+            }
+            for m in memories
+        ]
+
+        # 2. 检索今日计划任务
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+
+        planned_tasks = PlannedTask.objects.filter(
+            scheduled_time__gte=today_start,
+            scheduled_time__lt=today_end,
+            status='pending'
+        ).order_by('scheduled_time')[:limit]
+
+        context['planned_tasks'] = [
+            {
+                'id': t.id,
+                'title': t.title,
+                'description': t.description,
+                'task_type': t.task_type,
+                'scheduled_time': t.scheduled_time.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for t in planned_tasks
+        ]
+
+        # 3. 检索近期消息记录
+        recent_messages = MessageRecord.objects.filter(
+            timestamp__gte=datetime.now() - timedelta(days=3)
+        ).order_by('-timestamp')[:limit]
+
+        context['recent_messages'] = [
+            {
+                'id': m.id,
+                'type': m.message_type,
+                'sender': m.sender,
+                'receiver': m.receiver,
+                'content': m.content,
+                'timestamp': m.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for m in recent_messages
+        ]
+
+        # 4. 检索已存在的待回复任务（避免重复）
+        existing_reply_tasks = ReplyTask.objects.filter(
+            status='pending',
+            scheduled_time__gte=today_start,
+            scheduled_time__lt=today_end
+        ).order_by('scheduled_time')[:limit]
+
+        context['existing_reply_tasks'] = [
+            {
+                'id': t.id,
+                'content': t.content,
+                'scheduled_time': t.scheduled_time.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for t in existing_reply_tasks
+        ]
+
+        logger.info(f"聚合自主消息上下文：{len(context['memories'])}条记忆，{len(context['planned_tasks'])}条计划")
+        return context
+
+    def get_reply_execution_context(self, task_id: int) -> Dict:
+        """
+        获取回复任务执行所需的上下文
+
+        Args:
+            task_id: 回复任务ID
+
+        Returns:
+            Dict: 聚合的上下文信息
+        """
+        from core.models import ReplyTask, MessageRecord
+
+        context = {}
+
+        try:
+            task = ReplyTask.objects.get(id=task_id)
+
+            # 包含任务自身的上下文
+            context['task_context'] = task.context
+
+            # 检索相关历史消息
+            if task.trigger_type == 'user':
+                # 如果是用户触发，检索与用户的对话历史
+                recent_messages = MessageRecord.objects.order_by('-timestamp')[:10]
+
+                context['recent_messages'] = [
+                    {
+                        'type': m.message_type,
+                        'sender': m.sender,
+                        'receiver': m.receiver,
+                        'content': m.content,
+                        'timestamp': m.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                    }
+                    for m in recent_messages
+                ]
+
+            logger.info(f"为回复任务 {task_id} 聚合了上下文")
+
+        except ReplyTask.DoesNotExist:
+            logger.error(f"回复任务 {task_id} 不存在")
+
+        return context
+
+    def search_memories_by_keyword(self, keyword: str, limit: int = 10) -> List[Dict]:
+        """
+        根据关键词搜索记忆
+
+        Args:
+            keyword: 搜索关键词
+            limit: 结果数量限制
+
+        Returns:
+            List[Dict]: 匹配的记忆列表
+        """
+        from core.models import MemoryLibrary
+
+        memories = MemoryLibrary.objects.filter(
+            Q(title__icontains=keyword) | Q(content__icontains=keyword)
+        ).filter(
+            Q(forget_time__isnull=True) | Q(forget_time__gt=timezone.now())
+        ).order_by('-weight', '-strength')[:limit]
+
+        return [
+            {
+                'id': m.id,
+                'title': m.title,
+                'content': m.content,
+                'type': m.memory_type,
+                'strength': m.strength,
+                'weight': m.weight,
+            }
+            for m in memories
+        ]
