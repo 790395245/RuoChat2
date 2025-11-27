@@ -12,7 +12,17 @@ class AIService:
     """AI决策服务 - 集成OpenAI API实现各种AI判断节点"""
 
     def __init__(self):
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # 初始化 OpenAI 客户端
+        client_kwargs = {
+            'api_key': settings.OPENAI_API_KEY
+        }
+
+        # 如果配置了自定义 API Base URL，则使用它
+        if settings.OPENAI_API_BASE:
+            client_kwargs['base_url'] = settings.OPENAI_API_BASE
+            logger.info(f"使用自定义 API Base URL: {settings.OPENAI_API_BASE}")
+
+        self.client = OpenAI(**client_kwargs)
         self.model = settings.OPENAI_MODEL
 
     def _call_openai(self, messages: List[Dict], temperature: float = 0.7) -> str:

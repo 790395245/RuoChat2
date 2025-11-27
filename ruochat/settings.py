@@ -106,6 +106,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # OpenAI API 配置
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4-turbo-preview')
+OPENAI_API_BASE = os.getenv('OPENAI_API_BASE', '')  # 自定义 API Base URL
 
 # 微信配置
 WECHAT_ENABLED = os.getenv('WECHAT_ENABLED', 'False') == 'True'
