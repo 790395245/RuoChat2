@@ -101,7 +101,7 @@ class AIService:
 
         messages = [
             {"role": "system", "content": f"{character_setting}\n\n你需要决定如何回复消息，以及何时回复（立即/延迟几分钟）。"},
-            {"role": "user", "content": f"发送者：{sender}\n\n接收到的消息：{message_content}\n\n相关上下文：\n{context_str}\n\n请提供：\n1. 回复内容\n2. 回复时间（格式：立即 或 延迟X分钟）\n\n请以JSON格式返回：{{'content': '回复内容', 'delay_minutes': 0}}"}
+            {"role": "user", "content": f"发送者：{sender}\n\n接收到的消息：{message_content}\n\n相关上下文：\n{context_str}\n\n请提供：\n1. 回复内容\n2. 回复时间（格式：立即 或 延迟X分钟）\n\n请以JSON格式返回：{{\"content\": \"回复内容\", \"delay_minutes\": 0}}"}
         ]
 
         try:
@@ -152,7 +152,7 @@ class AIService:
 
         messages = [
             {"role": "system", "content": f"{character_setting}\n\n你需要判断对话中是否存在值得记忆的点（重要信息、情感时刻、特殊事件等）。"},
-            {"role": "user", "content": f"发送者：{sender}\n\n消息内容：{message_content}\n\n相关上下文：\n{context_str}\n\n请判断是否存在记忆点，如果存在，请提供：\n1. 记忆标题\n2. 记忆内容\n3. 记忆强度（1-10）\n4. 记忆权重（0.1-10.0）\n5. 遗忘天数（多少天后遗忘，0表示永不遗忘）\n\n请以JSON格式返回：{{'has_memory': true/false, 'title': '标题', 'content': '内容', 'strength': 5, 'weight': 1.0, 'forget_days': 30}}"}
+            {"role": "user", "content": f"发送者：{sender}\n\n消息内容：{message_content}\n\n相关上下文：\n{context_str}\n\n请判断是否存在记忆点，如果存在，请提供：\n1. 记忆标题\n2. 记忆内容\n3. 记忆强度（1-10）\n4. 记忆权重（0.1-10.0）\n5. 遗忘天数（多少天后遗忘，0表示永不遗忘）\n\n请以JSON格式返回：{{\"has_memory\": true, \"title\": \"标题\", \"content\": \"内容\", \"strength\": 5, \"weight\": 1.0, \"forget_days\": 30}}"}
         ]
 
         try:
@@ -202,7 +202,7 @@ class AIService:
 
         messages = [
             {"role": "system", "content": f"{character_setting}\n\n你需要根据记忆和历史计划，为今天生成计划任务。"},
-            {"role": "user", "content": f"今天是{datetime.now().strftime('%Y年%m月%d日 %A')}\n\n相关上下文：\n{context_str}\n\n请生成今天的计划任务列表（3-8个任务），每个任务包含：\n1. 任务标题\n2. 任务描述\n3. 任务类型（daily/special/reminder）\n4. 计划时间（HH:MM格式）\n\n请以JSON格式返回：{{'tasks': [{{'title': '标题', 'description': '描述', 'task_type': 'daily', 'time': '09:00'}}]}}"}
+            {"role": "user", "content": f"今天是{datetime.now().strftime('%Y年%m月%d日 %A')}\n\n相关上下文：\n{context_str}\n\n请生成今天的计划任务列表（3-8个任务），每个任务包含：\n1. 任务标题\n2. 任务描述\n3. 任务类型（daily/special/reminder）\n4. 计划时间（HH:MM格式）\n\n请以JSON格式返回：{{\"tasks\": [{{\"title\": \"标题\", \"description\": \"描述\", \"task_type\": \"daily\", \"time\": \"09:00\"}}]}}"}
         ]
 
         try:
@@ -257,7 +257,7 @@ class AIService:
 
         messages = [
             {"role": "system", "content": f"{character_setting}\n\n你需要根据今天的计划任务和记忆，生成主动发送的消息。"},
-            {"role": "user", "content": f"今天是{datetime.now().strftime('%Y年%m月%d日 %A')}\n\n相关上下文：\n{context_str}\n\n请生成今天需要主动发送的消息（1-5条），每条消息包含：\n1. 消息内容\n2. 发送时间（HH:MM格式）\n\n请以JSON格式返回：{{'messages': [{{'content': '消息内容', 'time': '09:00'}}]}}"}
+            {"role": "user", "content": f"今天是{datetime.now().strftime('%Y年%m月%d日 %A')}\n\n相关上下文：\n{context_str}\n\n请生成今天需要主动发送的消息（1-5条），每条消息包含：\n1. 消息内容\n2. 发送时间（HH:MM格式）\n\n请以JSON格式返回：{{\"messages\": [{{\"content\": \"消息内容\", \"time\": \"09:00\"}}]}}"}
         ]
 
         try:
@@ -316,27 +316,51 @@ class AIService:
 
     def _extract_json(self, text: str) -> Dict:
         """从文本中提取JSON"""
+        import re
+        import ast
+
+        # 首先移除 Qwen3 等模型的 thinking 标签
+        # 支持 <think>...</think> 格式
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        text = text.strip()
+
+        def try_parse(json_str: str) -> Dict:
+            """尝试解析 JSON，支持单引号格式（Python 字典风格）"""
+            json_str = json_str.strip()
+            try:
+                # 首先尝试标准 JSON 解析
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                # 如果失败，尝试用 ast.literal_eval 解析 Python 字典格式
+                try:
+                    result = ast.literal_eval(json_str)
+                    if isinstance(result, dict):
+                        return result
+                except (ValueError, SyntaxError):
+                    pass
+                raise
+
         try:
             # 尝试直接解析
-            return json.loads(text)
-        except json.JSONDecodeError:
+            return try_parse(text)
+        except (json.JSONDecodeError, ValueError, SyntaxError):
             # 尝试提取代码块中的JSON
             if '```json' in text:
                 start = text.find('```json') + 7
                 end = text.find('```', start)
                 json_str = text[start:end].strip()
-                return json.loads(json_str)
+                return try_parse(json_str)
             elif '```' in text:
                 start = text.find('```') + 3
                 end = text.find('```', start)
                 json_str = text[start:end].strip()
-                return json.loads(json_str)
+                return try_parse(json_str)
             else:
                 # 尝试查找JSON对象
                 start = text.find('{')
                 end = text.rfind('}') + 1
                 if start != -1 and end > start:
                     json_str = text[start:end]
-                    return json.loads(json_str)
+                    return try_parse(json_str)
 
             raise ValueError(f"无法从文本中提取JSON: {text}")
