@@ -1,6 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
 import json
 import logging
 
@@ -172,3 +173,188 @@ def list_messages(request):
     ).order_by('-timestamp')[:100])
 
     return JsonResponse({'messages': messages})
+
+
+# ==================== Webhook API ====================
+
+@csrf_exempt
+@require_http_methods(["POST", "GET"])
+def webhook_incoming(request):
+    """
+    Webhook 消息接收端点
+    接收来自 Synology Chat 或其他服务的消息
+
+    Synology Chat 发送的数据字段：
+    - token: bot token
+    - user_id: 用户ID
+    - username: 用户名
+    - post_id: 消息ID
+    - timestamp: 时间戳
+    - text: 消息内容
+    """
+    from .services.webhook_service import get_webhook_service
+    from .services.message_handler import get_message_handler
+
+    try:
+        # 记录请求详情用于调试
+        logger.info(f"Webhook 收到请求:")
+        logger.info(f"  Content-Type: {request.content_type}")
+        logger.info(f"  Body: {request.body[:500] if request.body else 'empty'}")
+
+        # GET 请求用于验证 webhook
+        if request.method == 'GET':
+            return JsonResponse({
+                'success': True,
+                'message': 'Webhook endpoint is active',
+                'service': 'RuoChat2'
+            })
+
+        logger.info(f"  POST data: {dict(request.POST)}")
+
+        # POST 请求处理消息
+        # Synology Chat 使用 application/x-www-form-urlencoded 格式
+        if request.content_type and 'application/json' in request.content_type:
+            data = json.loads(request.body)
+        else:
+            # Synology Chat 使用表单数据
+            data = {
+                'user_id': request.POST.get('user_id', ''),
+                'username': request.POST.get('username', '未知用户'),
+                'text': request.POST.get('text', ''),
+                'post_id': request.POST.get('post_id', ''),
+                'timestamp': request.POST.get('timestamp', ''),
+                'token': request.POST.get('token', ''),
+            }
+
+        logger.info(f"Webhook 解析数据: {data}")
+
+        # 验证 token（可选）
+        webhook_token = getattr(settings, 'WEBHOOK_TOKEN', '')
+        if webhook_token and data.get('token') != webhook_token:
+            logger.warning("Webhook token 验证失败")
+            # 不强制验证，继续处理
+
+        # 获取消息内容
+        text = data.get('text', '')
+        username = data.get('username', '未知用户')
+        user_id = data.get('user_id', '')
+
+        logger.info(f"收到消息: [{username}(ID:{user_id})] {text}")
+
+        if not text:
+            return JsonResponse({
+                'success': True,
+                'message': 'No text content'
+            })
+
+        # 获取 webhook 服务
+        webhook_service = get_webhook_service()
+
+        # 设置消息处理器回调
+        message_handler = get_message_handler()
+
+        def on_message(sender, content, msg_type, raw_msg):
+            """消息回调函数"""
+            try:
+                message_handler.handle_user_message(
+                    sender=sender,
+                    content=content,
+                    msg_type=msg_type,
+                    raw_msg=raw_msg
+                )
+            except Exception as e:
+                logger.error(f'处理消息失败: {e}')
+
+        webhook_service.set_message_callback(on_message)
+
+        # 处理消息
+        result = webhook_service.handle_incoming_message(data)
+
+        return JsonResponse(result)
+
+    except Exception as e:
+        logger.error(f"Webhook 处理异常: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def webhook_send(request):
+    """
+    通过 Webhook 发送消息
+    POST 参数: content (消息内容), user_id (可选，用户ID)
+    """
+    from .services.webhook_service import get_webhook_service
+
+    try:
+        if request.content_type == 'application/json':
+            data = json.loads(request.body)
+        else:
+            data = request.POST
+
+        content = data.get('content', '')
+        user_id = data.get('user_id')
+
+        if not content:
+            return JsonResponse({
+                'success': False,
+                'error': '消息内容不能为空'
+            }, status=400)
+
+        webhook_service = get_webhook_service()
+        result = webhook_service.send_message(content, user_id)
+
+        return JsonResponse({
+            'success': result,
+            'message': '消息已发送' if result else '发送失败'
+        })
+
+    except Exception as e:
+        logger.error(f"发送消息异常: {e}")
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+@require_http_methods(["GET"])
+def webhook_status(request):
+    """获取 Webhook 服务状态"""
+    from .services.webhook_service import get_webhook_service
+
+    webhook_service = get_webhook_service()
+
+    return JsonResponse({
+        'enabled': webhook_service.enabled,
+        'webhook_url_configured': bool(webhook_service.webhook_url),
+        'message': 'Webhook 服务运行中' if webhook_service.enabled else 'Webhook 服务未配置'
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def webhook_test(request):
+    """测试 Webhook 连接"""
+    from .services.webhook_service import get_webhook_service
+
+    webhook_service = get_webhook_service()
+
+    if not webhook_service.enabled:
+        return JsonResponse({
+            'success': False,
+            'error': 'Webhook 服务未配置'
+        }, status=400)
+
+    result = webhook_service.test_connection()
+
+    return JsonResponse({
+        'success': result,
+        'message': '连接测试成功' if result else '连接测试失败'
+    })
+
+

@@ -73,24 +73,20 @@ def _send_message(task: ReplyTask) -> bool:
         bool: 是否发送成功
     """
     try:
-        # 获取微信服务
-        from core.services.wechat_service import get_wechat_service
+        # 获取 Webhook 服务
+        from core.services.webhook_service import get_webhook_service
 
-        wechat = get_wechat_service()
+        webhook = get_webhook_service()
 
-        if not wechat.is_logged_in:
-            logger.warning("微信未登录，无法发送消息")
+        if not webhook.enabled:
+            logger.warning("Webhook 服务未启用，无法发送消息")
             return False
 
-        # 确定接收者
-        receiver = _determine_receiver(task)
-
-        if not receiver:
-            logger.error(f"无法确定回复任务 #{task.id} 的接收者")
-            return False
+        # 确定接收者（用户ID列表）
+        user_ids = _determine_receiver(task)
 
         # 发送消息
-        success = wechat.send_message(task.content, receiver)
+        success = webhook.send_message(task.content, user_ids)
 
         return success
 
@@ -99,33 +95,28 @@ def _send_message(task: ReplyTask) -> bool:
         return False
 
 
-def _determine_receiver(task: ReplyTask) -> Optional[str]:
+def _determine_receiver(task: ReplyTask) -> Optional[list]:
     """
-    确定消息接收者
+    确定消息接收者（用户ID列表）
 
     Args:
         task: 回复任务对象
 
     Returns:
-        Optional[str]: 接收者用户名，None表示无法确定
+        Optional[list]: 接收者用户ID列表，None表示使用默认配置
     """
     try:
         # 从任务上下文中获取接收者信息
         context = task.context or {}
 
         if task.trigger_type == 'user':
-            # 用户触发的任务，回复给原发送者
-            sender = context.get('sender')
-            if sender:
-                # 这里需要将发送者昵称转换为微信用户名
-                # 实际使用时需要维护一个昵称到用户名的映射
-                return sender
+            # 用户触发的任务，尝试获取原发送者的用户ID
+            user_id = context.get('user_id')
+            if user_id:
+                return [int(user_id)] if isinstance(user_id, (str, int)) else None
 
-        elif task.trigger_type == 'autonomous':
-            # 自主触发的任务，发送给默认接收者（文件传输助手或指定用户）
-            # 这里可以从配置中读取默认接收者
-            return 'filehelper'
-
+        # 自主触发的任务或未找到特定用户ID时，使用默认用户ID列表
+        # webhook_service 会自动使用 WEBHOOK_USER_IDS 配置
         return None
 
     except Exception as e:

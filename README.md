@@ -51,6 +51,23 @@ RuoChat2 是一个基于 AI 的智能消息处理和自动回复系统，结合�
 
 ## 快速开始
 
+> **📌 重要提示**：首次使用请先完成数据库初始化！详细指南请参阅 [DATABASE_SETUP.md](DATABASE_SETUP.md)
+
+### 一键初始化（最快方式）✨
+
+**使用自动化脚本：**
+
+```bash
+# Linux/macOS用户
+./setup.sh
+
+# Windows用户
+setup.bat
+
+# Docker用户（推荐）
+docker-compose up -d  # 自动完成所有初始化
+```
+
 ### 方式一：Docker 部署（推荐）⭐
 
 Docker 部署是最简单快速的方式，无需手动配置 Python 环境和数据库。
@@ -171,15 +188,43 @@ python manage.py runserver
 ### 系统初始化
 
 ```bash
-python manage.py init_system [--force]
+# 基础初始化（创建默认配置和提示词）
+python manage.py init_system
+
+# 强制重新初始化（覆盖已有数据）
+python manage.py init_system --force
+
+# 添加示例数据（用于测试）
+python manage.py init_system --with-examples
 ```
 
-初始化系统数据，包括默认提示词和必要目录。
+初始化系统数据，包括默认提示词、人物设定和必要目录。
+
+### 配置检查
+
+```bash
+python manage.py check_config
+```
+
+全面检查系统配置，包括：
+- Django基础配置
+- 数据库连接和表结构
+- OpenAI API配置
+- 微信服务配置
+- 文件系统权限
+- 初始数据完整性
 
 ### 启动微信监听
 
 ```bash
-python manage.py start_wechat [--no-qr]
+# 默认方式（在命令行显示二维码）
+python manage.py start_wechat
+
+# 禁用命令行二维码（容器环境推荐）
+python manage.py start_wechat --no-qr
+
+# 自定义二维码保存路径
+python manage.py start_wechat --qr-path /path/to/qr.png
 ```
 
 启动微信消息监听服务。首次运行需要扫码登录。
@@ -204,13 +249,24 @@ python manage.py system_status
 
 系统提供 RESTful API 接口：
 
+### 系统状态
 - `GET /api/status/` - 获取系统状态
+
+### 配置管理
 - `POST /api/config/character/` - 设置人物设定
 - `POST /api/config/hotspot/` - 添加热点话题
+
+### 任务管理
 - `GET /api/tasks/planned/` - 获取计划任务列表
 - `GET /api/tasks/reply/` - 获取回复任务列表
+
+### 数据查询
 - `GET /api/memories/` - 获取记忆列表
 - `GET /api/messages/` - 获取消息记录
+
+### 微信服务
+- `GET /api/wechat/qr/` - 查看微信登录二维码（Web界面）
+- `GET /api/wechat/qr/image` - 获取二维码图片文件
 
 ## 项目结构
 
@@ -298,8 +354,40 @@ OPENAI_MODEL=gpt-4-turbo-preview
 
 ## 常见问题
 
+### Q: 首次启动报错，提示数据库连接失败？
+A: 请先完成数据库初始化：
+1. Docker用户：运行 `docker-compose up -d`（会自动初始化）
+2. 手动安装：参考 [DATABASE_SETUP.md](DATABASE_SETUP.md) 创建数据库
+3. 检查 `.env` 文件中的数据库配置是否正确
+
+### Q: 提示"人物设定未配置"怎么办？
+A: 运行初始化命令：
+```bash
+python manage.py init_system
+# 或使用Docker
+docker-compose exec web python manage.py init_system
+```
+
+### Q: 如何检查系统配置是否正确？
+A: 运行配置检查命令：
+```bash
+python manage.py check_config
+# 或使用Docker
+docker-compose exec web python manage.py check_config
+```
+
 ### Q: 微信登录失败怎么办？
-A: 检查网络连接，清除 `itchat.pkl` 缓存文件，重新运行 `start_wechat` 命令。
+A:
+1. 确保微信服务正在运行
+2. 访问 `http://localhost:8000/api/wechat/qr/` 查看二维码
+3. 如果二维码未生成，检查容器日志：`docker-compose logs -f wechat`
+4. 清除缓存：删除 `wechat_cache` 目录，重启服务
+
+### Q: 如何查看二维码登录？
+A:
+- Web方式（推荐）：浏览器访问 `http://localhost:8000/api/wechat/qr/`
+- 文件方式：查看 `media/wechat_qr.png` 图片
+- 容器内：`docker-compose logs -f wechat` 查看日志提示
 
 ### Q: AI 回复不准确？
 A: 调整人物设定和系统提示词，确保上下文信息充足。
@@ -309,6 +397,18 @@ A: 检查日志文件，确认 Django 应用正常运行且 APScheduler 已启�
 
 ### Q: 如何自定义 AI 决策逻辑？
 A: 修改 `core/services/ai_service.py` 中的决策方法。
+
+### Q: 如何重置所有数据？
+A:
+```bash
+# Docker方式（完全重置）
+docker-compose down -v
+docker-compose up -d
+
+# 手动方式（重新初始化）
+python manage.py migrate
+python manage.py init_system --force
+```
 
 ## 开发计划
 

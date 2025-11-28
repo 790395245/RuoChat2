@@ -100,6 +100,10 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# Media files (uploaded content)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -108,8 +112,10 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4-turbo-preview')
 OPENAI_API_BASE = os.getenv('OPENAI_API_BASE', '')  # 自定义 API Base URL
 
-# 微信配置
-WECHAT_ENABLED = os.getenv('WECHAT_ENABLED', 'False') == 'True'
+# Webhook 配置（Synology Chat 或其他服务）
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')  # 发送消息的 Webhook URL
+WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', '')  # 验证 token（可选）
+WEBHOOK_USER_IDS = os.getenv('WEBHOOK_USER_IDS', '')  # 默认接收用户ID，逗号分隔
 
 # APScheduler 配置
 SCHEDULER_CONFIG = {

@@ -38,12 +38,12 @@ class MessageHandler:
             sender: 消息发送者
             content: 消息内容
             msg_type: 消息类型
-            raw_msg: 原始消息数据
+            raw_msg: 原始消息数据（包含 user_id 等）
         """
         try:
             logger.info(f"开始处理用户消息：{sender} - {content[:50]}")
 
-            # 步骤1：消息已在wechat_service中写入消息记录库
+            # 步骤1：消息已在webhook_service中写入消息记录库
 
             # 步骤2：检索并添加上下文
             context = self.context_service.get_user_message_context(sender)
@@ -55,12 +55,18 @@ class MessageHandler:
                 context=context
             )
 
+            # 从原始消息中提取 user_id（用于 webhook 回复）
+            user_id = None
+            if raw_msg:
+                user_id = raw_msg.get('user_id')
+
             # 创建回复任务
             reply_task = ReplyTask.objects.create(
                 trigger_type='user',
                 content=reply_content,
                 context={
                     'sender': sender,
+                    'user_id': user_id,  # 保存用户ID用于回复
                     'original_message': content,
                     'msg_type': msg_type,
                 },

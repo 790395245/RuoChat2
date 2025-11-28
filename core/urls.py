@@ -20,4 +20,10 @@ urlpatterns = [
 
     # 消息记录
     path('messages/', views.list_messages, name='list_messages'),
+
+    # Webhook API
+    path('webhook/incoming/', views.webhook_incoming, name='webhook_incoming'),
+    path('webhook/send/', views.webhook_send, name='webhook_send'),
+    path('webhook/status/', views.webhook_status, name='webhook_status'),
+    path('webhook/test/', views.webhook_test, name='webhook_test'),
 ]
