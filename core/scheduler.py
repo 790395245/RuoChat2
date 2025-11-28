@@ -41,9 +41,9 @@ def start_scheduler():
 def _add_scheduled_jobs(scheduler: BackgroundScheduler):
     """添加所有定时任务"""
 
-    # 任务1：每日00:00 - 生成全天计划任务
+    # 任务1：每日00:00 - 为所有用户生成全天计划任务
     scheduler.add_job(
-        func=generate_daily_planned_tasks,
+        func=generate_daily_planned_tasks_for_all_users,
         trigger=CronTrigger(hour=0, minute=0),
         id='daily_planning_00_00',
         name='每日00:00生成全天计划任务',
@@ -51,9 +51,9 @@ def _add_scheduled_jobs(scheduler: BackgroundScheduler):
     )
     logger.info("已添加任务：每日00:00生成全天计划任务")
 
-    # 任务2：每日00:05 - 生成全天自动触发消息
+    # 任务2：每日00:05 - 为所有用户生成全天自动触发消息
     scheduler.add_job(
-        func=generate_autonomous_messages,
+        func=generate_autonomous_messages_for_all_users,
         trigger=CronTrigger(hour=0, minute=5),
         id='autonomous_messages_00_05',
         name='每日00:05生成全天自动触发消息',
@@ -72,9 +72,40 @@ def _add_scheduled_jobs(scheduler: BackgroundScheduler):
     logger.info("已添加任务：每分钟执行待回复任务")
 
 
-def generate_daily_planned_tasks():
+def generate_daily_planned_tasks_for_all_users():
     """
-    每日00:00执行：生成全天计划任务
+    每日00:00执行：为所有活跃用户生成全天计划任务
+    """
+    try:
+        logger.info("开始为所有用户生成每日计划任务...")
+
+        from core.models import ChatUser
+
+        # 获取所有活跃用户
+        active_users = ChatUser.objects.filter(is_active=True)
+        total_users = active_users.count()
+
+        if total_users == 0:
+            logger.info("没有活跃用户，跳过生成计划任务")
+            return
+
+        logger.info(f"发现 {total_users} 个活跃用户")
+
+        for user in active_users:
+            try:
+                generate_daily_planned_tasks(user)
+            except Exception as e:
+                logger.error(f"为用户 {user} 生成计划任务失败: {e}")
+
+        logger.info(f"完成为 {total_users} 个用户生成每日计划任务")
+
+    except Exception as e:
+        logger.error(f"生成每日计划任务失败: {e}", exc_info=True)
+
+
+def generate_daily_planned_tasks(user):
+    """
+    为指定用户生成全天计划任务
 
     阶段3：自主触发与定时任务
     1. 触发：自主触发 → 启动每日00:00任务
@@ -83,15 +114,15 @@ def generate_daily_planned_tasks():
     4. 数据存储：计划任务 → 写入计划任务库
     """
     try:
-        logger.info("开始生成每日计划任务...")
+        logger.info(f"为用户 {user} 生成计划任务...")
 
         from core.models import PlannedTask
         from core.services.ai_service import AIService
         from core.services.context_service import ContextService
 
-        # 获取上下文
+        # 获取该用户的上下文
         context_service = ContextService()
-        context = context_service.get_daily_planning_context()
+        context = context_service.get_daily_planning_context(user)
 
         # AI生成计划任务
         ai_service = AIService()
@@ -101,6 +132,7 @@ def generate_daily_planned_tasks():
         created_count = 0
         for task_data in tasks:
             PlannedTask.objects.create(
+                user=user,
                 title=task_data['title'],
                 description=task_data['description'],
                 task_type=task_data['task_type'],
@@ -109,15 +141,46 @@ def generate_daily_planned_tasks():
             )
             created_count += 1
 
-        logger.info(f"成功生成 {created_count} 个计划任务")
+        logger.info(f"为用户 {user} 成功生成 {created_count} 个计划任务")
 
     except Exception as e:
-        logger.error(f"生成每日计划任务失败: {e}", exc_info=True)
+        logger.error(f"为用户 {user} 生成计划任务失败: {e}", exc_info=True)
 
 
-def generate_autonomous_messages():
+def generate_autonomous_messages_for_all_users():
     """
-    每日00:05执行：生成全天自动触发消息
+    每日00:05执行：为所有活跃用户生成全天自动触发消息
+    """
+    try:
+        logger.info("开始为所有用户生成自主触发消息...")
+
+        from core.models import ChatUser
+
+        # 获取所有活跃用户
+        active_users = ChatUser.objects.filter(is_active=True)
+        total_users = active_users.count()
+
+        if total_users == 0:
+            logger.info("没有活跃用户，跳过生成自主消息")
+            return
+
+        logger.info(f"发现 {total_users} 个活跃用户")
+
+        for user in active_users:
+            try:
+                generate_autonomous_messages(user)
+            except Exception as e:
+                logger.error(f"为用户 {user} 生成自主消息失败: {e}")
+
+        logger.info(f"完成为 {total_users} 个用户生成自主触发消息")
+
+    except Exception as e:
+        logger.error(f"生成自主触发消息失败: {e}", exc_info=True)
+
+
+def generate_autonomous_messages(user):
+    """
+    为指定用户生成全天自动触发消息
 
     阶段3：自主触发与定时任务
     1. 触发：自主触发 → 启动每日00:05任务
@@ -126,15 +189,15 @@ def generate_autonomous_messages():
     4. 数据存储：自动回复任务 → 写入回复任务库
     """
     try:
-        logger.info("开始生成自主触发消息...")
+        logger.info(f"为用户 {user} 生成自主触发消息...")
 
         from core.models import ReplyTask
         from core.services.ai_service import AIService
         from core.services.context_service import ContextService
 
-        # 获取上下文
+        # 获取该用户的上下文
         context_service = ContextService()
-        context = context_service.get_autonomous_message_context()
+        context = context_service.get_autonomous_message_context(user)
 
         # AI生成自主消息
         ai_service = AIService()
@@ -144,6 +207,7 @@ def generate_autonomous_messages():
         created_count = 0
         for msg_data in messages:
             ReplyTask.objects.create(
+                user=user,
                 trigger_type='autonomous',
                 content=msg_data['content'],
                 scheduled_time=msg_data['scheduled_time'],
@@ -155,10 +219,10 @@ def generate_autonomous_messages():
             )
             created_count += 1
 
-        logger.info(f"成功生成 {created_count} 条自主触发消息")
+        logger.info(f"为用户 {user} 成功生成 {created_count} 条自主触发消息")
 
     except Exception as e:
-        logger.error(f"生成自主触发消息失败: {e}", exc_info=True)
+        logger.error(f"为用户 {user} 生成自主触发消息失败: {e}", exc_info=True)
 
 
 def execute_pending_reply_tasks():
@@ -174,26 +238,27 @@ def execute_pending_reply_tasks():
         from core.models import ReplyTask
         from django.utils import timezone
 
-        # 查找到期的待执行任务
+        # 查找到期的待执行任务（所有用户）
         now = timezone.now()
         pending_tasks = ReplyTask.objects.filter(
             status='pending',
-            scheduled_time__lte=now
-        ).order_by('scheduled_time')[:10]  # 每次最多执行10个任务
+            scheduled_time__lte=now,
+            user__is_active=True  # 只处理活跃用户的任务
+        ).select_related('user').order_by('scheduled_time')[:10]  # 每次最多执行10个任务
 
         if not pending_tasks.exists():
             return
 
         logger.info(f"发现 {pending_tasks.count()} 个待执行的回复任务")
 
-        # 导入执行服务（将在下一个任务中实现）
+        # 导入执行服务
         from core.services.task_executor import execute_reply_task
 
         for task in pending_tasks:
             try:
                 execute_reply_task(task)
             except Exception as e:
-                logger.error(f"执行回复任务 #{task.id} 失败: {e}")
+                logger.error(f"执行回复任务 #{task.id} (用户: {task.user}) 失败: {e}")
 
     except Exception as e:
         logger.error(f"执行待回复任务失败: {e}", exc_info=True)

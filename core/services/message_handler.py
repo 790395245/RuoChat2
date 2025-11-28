@@ -1,11 +1,14 @@
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 from datetime import datetime
 from django.utils import timezone
 
-from core.models import MessageRecord, ReplyTask, MemoryLibrary
+from core.models import MessageRecord, ReplyTask, MemoryLibrary, ChatUser
 from core.services.ai_service import AIService
 from core.services.context_service import ContextService
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +22,7 @@ class MessageHandler:
 
     def handle_user_message(
         self,
+        user: ChatUser,
         sender: str,
         content: str,
         msg_type: str = 'text',
@@ -35,18 +39,19 @@ class MessageHandler:
         5. 同步修改当日其他自动回复任务
 
         Args:
+            user: 聊天用户对象
             sender: 消息发送者
             content: 消息内容
             msg_type: 消息类型
             raw_msg: 原始消息数据（包含 user_id 等）
         """
         try:
-            logger.info(f"开始处理用户消息：{sender} - {content[:50]}")
+            logger.info(f"开始处理用户 {user} 的消息：{sender} - {content[:50]}")
 
             # 步骤1：消息已在webhook_service中写入消息记录库
 
             # 步骤2：检索并添加上下文
-            context = self.context_service.get_user_message_context(sender)
+            context = self.context_service.get_user_message_context(user, sender)
 
             # 步骤3：AI判断回复内容和回复时间
             reply_content, scheduled_time = self.ai_service.decide_reply_content_and_timing(
@@ -56,17 +61,18 @@ class MessageHandler:
             )
 
             # 从原始消息中提取 user_id（用于 webhook 回复）
-            user_id = None
+            webhook_user_id = None
             if raw_msg:
-                user_id = raw_msg.get('user_id')
+                webhook_user_id = raw_msg.get('user_id')
 
             # 创建回复任务
             reply_task = ReplyTask.objects.create(
+                user=user,
                 trigger_type='user',
                 content=reply_content,
                 context={
                     'sender': sender,
-                    'user_id': user_id,  # 保存用户ID用于回复
+                    'user_id': webhook_user_id,  # 保存用户ID用于回复
                     'original_message': content,
                     'msg_type': msg_type,
                 },
@@ -87,8 +93,9 @@ class MessageHandler:
             )
 
             if memory_info:
-                # 检查是否存在类似的记忆（标题相同或内容相似）
+                # 检查该用户是否存在类似的记忆（标题相同或内容相似）
                 existing_memory = MemoryLibrary.objects.filter(
+                    user=user,
                     title=memory_info['title']
                 ).first()
 
@@ -99,6 +106,7 @@ class MessageHandler:
                 else:
                     # 创建新记忆
                     new_memory = MemoryLibrary.objects.create(
+                        user=user,
                         title=memory_info['title'],
                         content=memory_info['content'],
                         memory_type='user_memory',
@@ -109,14 +117,14 @@ class MessageHandler:
                     logger.info(f"创建新记忆: {new_memory.title}")
 
             # 步骤5：同步修改当日其他自动回复任务
-            self._sync_autonomous_tasks(reply_task)
+            self._sync_autonomous_tasks(user, reply_task)
 
-            logger.info(f"用户消息处理完成: {sender}")
+            logger.info(f"用户 {user} 的消息处理完成: {sender}")
 
         except Exception as e:
             logger.error(f"处理用户消息失败: {e}", exc_info=True)
 
-    def _sync_autonomous_tasks(self, new_reply_task: ReplyTask):
+    def _sync_autonomous_tasks(self, user: ChatUser, new_reply_task: ReplyTask):
         """
         同步修改当日其他自动回复任务
 
@@ -124,6 +132,7 @@ class MessageHandler:
         避免在相近的时间发送多条消息
 
         Args:
+            user: 聊天用户对象
             new_reply_task: 新创建的回复任务
         """
         try:
@@ -133,8 +142,9 @@ class MessageHandler:
             time_window_start = new_reply_task.scheduled_time - timedelta(minutes=15)
             time_window_end = new_reply_task.scheduled_time + timedelta(minutes=15)
 
-            # 查找时间窗口内的其他待执行任务
+            # 查找该用户时间窗口内的其他待执行任务
             conflicting_tasks = ReplyTask.objects.filter(
+                user=user,
                 trigger_type='autonomous',
                 status='pending',
                 scheduled_time__gte=time_window_start,

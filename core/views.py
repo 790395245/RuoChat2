@@ -6,6 +6,7 @@ import json
 import logging
 
 from .models import (
+    ChatUser,
     PromptLibrary,
     MemoryLibrary,
     PlannedTask,
@@ -22,6 +23,7 @@ def system_status(request):
     """获取系统状态"""
     return JsonResponse({
         'status': 'running',
+        'users_count': ChatUser.objects.filter(is_active=True).count(),
         'prompts_count': PromptLibrary.objects.filter(is_active=True).count(),
         'memories_count': MemoryLibrary.objects.count(),
         'planned_tasks_count': PlannedTask.objects.filter(status='pending').count(),
@@ -37,12 +39,20 @@ def set_character_config(request):
     try:
         data = json.loads(request.body)
         content = data.get('content', '')
+        user_id = data.get('user_id', '')
 
         if not content:
             return JsonResponse({'error': '人物设定内容不能为空'}, status=400)
 
-        # 更新或创建人物设定
+        if not user_id:
+            return JsonResponse({'error': '用户ID不能为空'}, status=400)
+
+        # 获取或创建用户
+        chat_user = ChatUser.get_or_create_by_webhook(user_id=str(user_id))
+
+        # 更新或创建该用户的人物设定
         prompt, created = PromptLibrary.objects.update_or_create(
+            user=chat_user,
             category='character',
             key='main_character',
             defaults={
@@ -52,12 +62,13 @@ def set_character_config(request):
         )
 
         action = '创建' if created else '更新'
-        logger.info(f"{action}人物设定成功")
+        logger.info(f"用户 {chat_user}: {action}人物设定成功")
 
         return JsonResponse({
             'success': True,
             'message': f'{action}成功',
-            'id': prompt.id
+            'id': prompt.id,
+            'user_id': chat_user.id
         })
     except Exception as e:
         logger.error(f"设置人物设定失败: {e}")
@@ -72,9 +83,16 @@ def add_hotspot(request):
         data = json.loads(request.body)
         title = data.get('title', '')
         content = data.get('content', '')
+        user_id = data.get('user_id', '')
 
         if not title or not content:
             return JsonResponse({'error': '标题和内容不能为空'}, status=400)
+
+        if not user_id:
+            return JsonResponse({'error': '用户ID不能为空'}, status=400)
+
+        # 获取或创建用户
+        chat_user = ChatUser.get_or_create_by_webhook(user_id=str(user_id))
 
         # 使用AI判断是否值得记忆
         ai_service = AIService()
@@ -82,21 +100,23 @@ def add_hotspot(request):
 
         if is_memorable:
             memory = MemoryLibrary.objects.create(
+                user=chat_user,
                 title=title,
                 content=content,
                 memory_type='hotspot',
                 strength=5,  # 初始强度
                 weight=1.0,  # 初始权重
             )
-            logger.info(f"添加热点记忆: {title}")
+            logger.info(f"用户 {chat_user}: 添加热点记忆: {title}")
             return JsonResponse({
                 'success': True,
                 'message': '热点已添加到记忆库',
                 'id': memory.id,
+                'user_id': chat_user.id,
                 'memorable': True
             })
         else:
-            logger.info(f"热点不值得记忆: {title}")
+            logger.info(f"用户 {chat_user}: 热点不值得记忆: {title}")
             return JsonResponse({
                 'success': True,
                 'message': '热点不值得记忆',
@@ -111,13 +131,17 @@ def add_hotspot(request):
 def list_planned_tasks(request):
     """获取计划任务列表"""
     status = request.GET.get('status', None)
+    user_id = request.GET.get('user_id', None)
     queryset = PlannedTask.objects.all()
+
+    if user_id:
+        queryset = queryset.filter(user__user_id=user_id)
 
     if status:
         queryset = queryset.filter(status=status)
 
     tasks = list(queryset.values(
-        'id', 'title', 'description', 'task_type',
+        'id', 'user__user_id', 'title', 'description', 'task_type',
         'scheduled_time', 'status', 'created_at'
     ).order_by('-scheduled_time')[:50])
 
@@ -128,13 +152,17 @@ def list_planned_tasks(request):
 def list_reply_tasks(request):
     """获取回复任务列表"""
     status = request.GET.get('status', None)
+    user_id = request.GET.get('user_id', None)
     queryset = ReplyTask.objects.all()
+
+    if user_id:
+        queryset = queryset.filter(user__user_id=user_id)
 
     if status:
         queryset = queryset.filter(status=status)
 
     tasks = list(queryset.values(
-        'id', 'trigger_type', 'content', 'scheduled_time',
+        'id', 'user__user_id', 'trigger_type', 'content', 'scheduled_time',
         'status', 'created_at', 'executed_at'
     ).order_by('-scheduled_time')[:50])
 
@@ -145,13 +173,17 @@ def list_reply_tasks(request):
 def list_memories(request):
     """获取记忆列表"""
     memory_type = request.GET.get('type', None)
+    user_id = request.GET.get('user_id', None)
     queryset = MemoryLibrary.objects.all()
+
+    if user_id:
+        queryset = queryset.filter(user__user_id=user_id)
 
     if memory_type:
         queryset = queryset.filter(memory_type=memory_type)
 
     memories = list(queryset.values(
-        'id', 'title', 'content', 'memory_type',
+        'id', 'user__user_id', 'title', 'content', 'memory_type',
         'strength', 'weight', 'forget_time', 'created_at'
     ).order_by('-created_at')[:50])
 
@@ -162,13 +194,17 @@ def list_memories(request):
 def list_messages(request):
     """获取消息记录列表"""
     message_type = request.GET.get('type', None)
+    user_id = request.GET.get('user_id', None)
     queryset = MessageRecord.objects.all()
+
+    if user_id:
+        queryset = queryset.filter(user__user_id=user_id)
 
     if message_type:
         queryset = queryset.filter(message_type=message_type)
 
     messages = list(queryset.values(
-        'id', 'message_type', 'sender', 'receiver',
+        'id', 'user__user_id', 'message_type', 'sender', 'receiver',
         'content', 'timestamp', 'created_at'
     ).order_by('-timestamp')[:100])
 
@@ -253,10 +289,11 @@ def webhook_incoming(request):
         # 设置消息处理器回调
         message_handler = get_message_handler()
 
-        def on_message(sender, content, msg_type, raw_msg):
+        def on_message(user, sender, content, msg_type, raw_msg):
             """消息回调函数"""
             try:
                 message_handler.handle_user_message(
+                    user=user,
                     sender=sender,
                     content=content,
                     msg_type=msg_type,

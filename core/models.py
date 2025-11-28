@@ -2,6 +2,54 @@ from django.db import models
 from django.utils import timezone
 
 
+class ChatUser(models.Model):
+    """聊天用户模型 - 用于区分不同的聊天对象"""
+
+    user_id = models.CharField('用户ID', max_length=100, unique=True, db_index=True,
+                               help_text='来自外部系统的用户唯一标识')
+    username = models.CharField('用户名', max_length=200, blank=True)
+    nickname = models.CharField('昵称', max_length=200, blank=True)
+    is_active = models.BooleanField('是否激活', default=True, db_index=True)
+    metadata = models.JSONField('元数据', default=dict, blank=True,
+                                help_text='存储额外的用户信息')
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        db_table = 'chat_user'
+        verbose_name = '聊天用户'
+        verbose_name_plural = '聊天用户'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.nickname or self.username or self.user_id
+
+    @classmethod
+    def get_or_create_by_webhook(cls, user_id: str, username: str = '', **kwargs):
+        """
+        根据 webhook 数据获取或创建用户
+
+        Args:
+            user_id: 用户ID
+            username: 用户名
+
+        Returns:
+            ChatUser 实例
+        """
+        user, created = cls.objects.get_or_create(
+            user_id=str(user_id),
+            defaults={
+                'username': username,
+                'nickname': username,
+                'metadata': kwargs,
+            }
+        )
+        if not created and username and user.username != username:
+            user.username = username
+            user.save(update_fields=['username', 'updated_at'])
+        return user
+
+
 class PromptLibrary(models.Model):
     """提示词库 - 存储人物设定和系统提示词"""
 
@@ -11,8 +59,14 @@ class PromptLibrary(models.Model):
         ('template', '回复模板'),
     ]
 
+    user = models.ForeignKey(
+        ChatUser,
+        on_delete=models.CASCADE,
+        related_name='prompts',
+        verbose_name='所属用户'
+    )
     category = models.CharField('类别', max_length=50, choices=CATEGORY_CHOICES, db_index=True)
-    key = models.CharField('唯一标识', max_length=100, unique=True)
+    key = models.CharField('唯一标识', max_length=100)
     content = models.TextField('提示词内容')
     is_active = models.BooleanField('是否激活', default=True, db_index=True)
     metadata = models.JSONField('元数据', default=dict, blank=True)
@@ -27,9 +81,12 @@ class PromptLibrary(models.Model):
         indexes = [
             models.Index(fields=['category', 'is_active']),
         ]
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'key'], name='unique_user_prompt_key')
+        ]
 
     def __str__(self):
-        return f"{self.get_category_display()} - {self.key}"
+        return f"{self.user} - {self.get_category_display()} - {self.key}"
 
 
 class MemoryLibrary(models.Model):
@@ -41,6 +98,12 @@ class MemoryLibrary(models.Model):
         ('important_event', '重要事件'),
     ]
 
+    user = models.ForeignKey(
+        ChatUser,
+        on_delete=models.CASCADE,
+        related_name='memories',
+        verbose_name='所属用户'
+    )
     title = models.CharField('标题', max_length=200)
     content = models.TextField('内容')
     memory_type = models.CharField('记忆类型', max_length=50, choices=MEMORY_TYPE_CHOICES, db_index=True)
@@ -59,10 +122,11 @@ class MemoryLibrary(models.Model):
         indexes = [
             models.Index(fields=['memory_type', '-weight']),
             models.Index(fields=['-created_at']),
+            models.Index(fields=['user', 'memory_type']),
         ]
 
     def __str__(self):
-        return f"{self.get_memory_type_display()} - {self.title}"
+        return f"{self.user} - {self.get_memory_type_display()} - {self.title}"
 
     def strengthen(self, delta=1):
         """强化记忆"""
@@ -93,6 +157,12 @@ class PlannedTask(models.Model):
         ('failed', '执行失败'),
     ]
 
+    user = models.ForeignKey(
+        ChatUser,
+        on_delete=models.CASCADE,
+        related_name='planned_tasks',
+        verbose_name='所属用户'
+    )
     title = models.CharField('任务标题', max_length=200)
     description = models.TextField('任务描述', blank=True)
     task_type = models.CharField('任务类型', max_length=50, choices=TASK_TYPE_CHOICES, db_index=True)
@@ -110,10 +180,11 @@ class PlannedTask(models.Model):
         ordering = ['scheduled_time']
         indexes = [
             models.Index(fields=['status', 'scheduled_time']),
+            models.Index(fields=['user', 'status']),
         ]
 
     def __str__(self):
-        return f"{self.title} - {self.get_status_display()}"
+        return f"{self.user} - {self.title} - {self.get_status_display()}"
 
     def mark_completed(self):
         """标记为已完成"""
@@ -138,6 +209,12 @@ class ReplyTask(models.Model):
         ('cancelled', '已取消'),
     ]
 
+    user = models.ForeignKey(
+        ChatUser,
+        on_delete=models.CASCADE,
+        related_name='reply_tasks',
+        verbose_name='所属用户'
+    )
     trigger_type = models.CharField('触发类型', max_length=20, choices=TRIGGER_TYPE_CHOICES, db_index=True)
     content = models.TextField('回复内容')
     context = models.JSONField('上下文信息', default=dict, blank=True, help_text='AI决策时的上下文')
@@ -158,10 +235,11 @@ class ReplyTask(models.Model):
         indexes = [
             models.Index(fields=['status', 'scheduled_time']),
             models.Index(fields=['trigger_type', 'status']),
+            models.Index(fields=['user', 'status']),
         ]
 
     def __str__(self):
-        return f"{self.get_trigger_type_display()} - {self.scheduled_time.strftime('%Y-%m-%d %H:%M')}"
+        return f"{self.user} - {self.get_trigger_type_display()} - {self.scheduled_time.strftime('%Y-%m-%d %H:%M')}"
 
     def mark_executing(self):
         """标记为执行中"""
@@ -190,6 +268,12 @@ class MessageRecord(models.Model):
         ('sent', '发送消息'),
     ]
 
+    user = models.ForeignKey(
+        ChatUser,
+        on_delete=models.CASCADE,
+        related_name='messages',
+        verbose_name='所属用户'
+    )
     message_type = models.CharField('消息类型', max_length=20, choices=MESSAGE_TYPE_CHOICES, db_index=True)
     sender = models.CharField('发送者', max_length=200, db_index=True)
     receiver = models.CharField('接收者', max_length=200, db_index=True)
@@ -201,7 +285,7 @@ class MessageRecord(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='messages',
+        related_name='message_records',
         verbose_name='关联回复任务'
     )
     metadata = models.JSONField('元数据', default=dict, blank=True)
@@ -216,7 +300,8 @@ class MessageRecord(models.Model):
             models.Index(fields=['-timestamp']),
             models.Index(fields=['message_type', '-timestamp']),
             models.Index(fields=['sender', '-timestamp']),
+            models.Index(fields=['user', '-timestamp']),
         ]
 
     def __str__(self):
-        return f"{self.get_message_type_display()} - {self.sender} -> {self.receiver}"
+        return f"{self.user} - {self.get_message_type_display()} - {self.sender} -> {self.receiver}"

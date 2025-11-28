@@ -136,9 +136,10 @@ def _record_sent_message(task: ReplyTask):
         receiver = _determine_receiver(task)
 
         MessageRecord.objects.create(
+            user=task.user,  # 关联到任务所属用户
             message_type='sent',
             sender='我',  # 当前用户
-            receiver=receiver or '未知',
+            receiver=str(receiver) if receiver else '未知',
             content=task.content,
             timestamp=timezone.now(),
             reply_task=task,
@@ -148,7 +149,7 @@ def _record_sent_message(task: ReplyTask):
             },
         )
 
-        logger.info(f"消息已记录到数据库：{task.content[:50]}...")
+        logger.info(f"消息已记录到数据库（用户: {task.user}）：{task.content[:50]}...")
 
     except Exception as e:
         logger.error(f"记录发送消息失败: {e}")
@@ -164,12 +165,13 @@ def execute_batch_reply_tasks(max_tasks: int = 10):
     try:
         from core.models import ReplyTask
 
-        # 查找到期的待执行任务
+        # 查找到期的待执行任务（只处理活跃用户的任务）
         now = timezone.now()
         pending_tasks = ReplyTask.objects.filter(
             status='pending',
-            scheduled_time__lte=now
-        ).order_by('scheduled_time')[:max_tasks]
+            scheduled_time__lte=now,
+            user__is_active=True
+        ).select_related('user').order_by('scheduled_time')[:max_tasks]
 
         if not pending_tasks.exists():
             logger.debug("没有待执行的回复任务")
@@ -187,7 +189,7 @@ def execute_batch_reply_tasks(max_tasks: int = 10):
                 else:
                     failed_count += 1
             except Exception as e:
-                logger.error(f"执行任务 #{task.id} 失败: {e}")
+                logger.error(f"执行任务 #{task.id} (用户: {task.user}) 失败: {e}")
                 failed_count += 1
 
         logger.info(f"批量执行完成：成功 {success_count} 个，失败 {failed_count} 个")

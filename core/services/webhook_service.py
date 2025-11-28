@@ -5,11 +5,14 @@ Webhook 消息服务 - 基于 Synology Chat API 实现
 import logging
 import requests
 import json
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, TYPE_CHECKING
 from datetime import datetime
 from django.conf import settings
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+if TYPE_CHECKING:
+    from core.models import ChatUser
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +149,6 @@ class WebhookService:
                 response_text = result.get("response_text", "")
                 if '"success":true' in response_text:
                     logger.info(f"消息已发送: {content[:50]}...")
-                    self._save_sent_message(content, str(target_user_ids))
                     return True
                 else:
                     logger.error(f"Synology Chat 返回错误: {response_text}")
@@ -157,6 +159,31 @@ class WebhookService:
 
         except Exception as e:
             logger.error(f"发送消息异常: {e}")
+            return False
+
+    def send_message_to_user(self, chat_user: 'ChatUser', content: str) -> bool:
+        """
+        发送消息给指定的聊天用户
+
+        Args:
+            chat_user: ChatUser 对象
+            content: 消息内容
+
+        Returns:
+            bool: 是否发送成功
+        """
+        # 从 ChatUser 的 user_id 获取 webhook 用户ID
+        try:
+            webhook_user_id = int(chat_user.user_id)
+            success = self.send_message(content, user_ids=[webhook_user_id])
+
+            if success:
+                # 保存发送的消息到数据库
+                self._save_sent_message(chat_user, content, str(chat_user.user_id))
+
+            return success
+        except (ValueError, TypeError):
+            logger.error(f"无效的用户ID: {chat_user.user_id}")
             return False
 
     def send_file(self, file_url: str, text: Optional[str] = None) -> bool:
@@ -193,7 +220,7 @@ class WebhookService:
         设置消息回调函数
 
         Args:
-            callback: 回调函数，接收参数 (sender, content, msg_type, raw_msg)
+            callback: 回调函数，接收参数 (user, sender, content, msg_type, raw_msg)
         """
         self.message_callback = callback
         logger.info("消息回调函数已设置")
@@ -209,6 +236,8 @@ class WebhookService:
             dict: 响应数据
         """
         try:
+            from core.models import ChatUser
+
             # 解析 Synology Chat 消息格式
             user_id = data.get('user_id', 'unknown')
             username = data.get('username', '未知用户')
@@ -216,10 +245,19 @@ class WebhookService:
             post_id = data.get('post_id', '')
             timestamp = data.get('timestamp', '')
 
-            logger.info(f"收到消息: [{username}] {text[:50]}...")
+            logger.info(f"收到消息: [{username}(ID:{user_id})] {text[:50]}...")
+
+            # 获取或创建聊天用户
+            chat_user = ChatUser.get_or_create_by_webhook(
+                user_id=str(user_id),
+                username=username,
+                post_id=post_id,
+                timestamp=timestamp
+            )
 
             # 保存到数据库
             self._save_received_message(
+                user=chat_user,
                 sender=username,
                 content=text,
                 msg_type='text',
@@ -230,6 +268,7 @@ class WebhookService:
             if self.message_callback:
                 try:
                     self.message_callback(
+                        user=chat_user,
                         sender=username,
                         content=text,
                         msg_type='text',
@@ -240,7 +279,8 @@ class WebhookService:
 
             return {
                 'success': True,
-                'message': '消息已接收'
+                'message': '消息已接收',
+                'user_id': chat_user.id
             }
 
         except Exception as e:
@@ -250,12 +290,13 @@ class WebhookService:
                 'error': str(e)
             }
 
-    def _save_received_message(self, sender: str, content: str, msg_type: str, raw_data: dict):
+    def _save_received_message(self, user: 'ChatUser', sender: str, content: str, msg_type: str, raw_data: dict):
         """保存接收到的消息到数据库"""
         from core.models import MessageRecord
 
         try:
             MessageRecord.objects.create(
+                user=user,
                 message_type='received',
                 sender=sender,
                 receiver='我',
@@ -270,12 +311,13 @@ class WebhookService:
         except Exception as e:
             logger.error(f"保存接收消息失败: {e}")
 
-    def _save_sent_message(self, content: str, receiver: str):
+    def _save_sent_message(self, user: 'ChatUser', content: str, receiver: str):
         """保存发送的消息到数据库"""
         from core.models import MessageRecord
 
         try:
             MessageRecord.objects.create(
+                user=user,
                 message_type='sent',
                 sender='我',
                 receiver=receiver,
@@ -297,7 +339,7 @@ class WebhookService:
             return False
 
         try:
-            result = self.send_message("🤖 RuoChat Webhook 连接测试")
+            result = self.send_message("RuoChat Webhook 连接测试")
             return result
         except Exception as e:
             logger.error(f"连接测试失败: {e}")

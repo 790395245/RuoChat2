@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
 from core.models import (
+    ChatUser,
     PromptLibrary,
     MemoryLibrary,
     PlannedTask,
@@ -22,26 +23,37 @@ class Command(BaseCommand):
         parser.add_argument(
             '--with-examples',
             action='store_true',
-            help='添加示例数据（用于测试和演示）',
+            help='添加示例数据（用于测试和演示，需要指定 --user-id）',
+        )
+        parser.add_argument(
+            '--user-id',
+            type=str,
+            help='指定用户ID（用于创建示例数据）',
         )
 
     def handle(self, *args, **options):
         force = options['force']
         with_examples = options['with_examples']
+        user_id = options.get('user_id')
 
         self.stdout.write(self.style.SUCCESS('=' * 60))
         self.stdout.write(self.style.SUCCESS('开始初始化RuoChat系统...'))
         self.stdout.write(self.style.SUCCESS('=' * 60))
 
-        # 1. 初始化提示词库
-        self._init_prompt_library(force)
-
-        # 2. 创建必要的目录
+        # 1. 创建必要的目录
         self._create_directories()
 
-        # 3. 添加示例数据（可选）
+        # 2. 创建管理员账号
+        self._create_admin_user()
+
+        # 3. 添加示例数据（可选，需要指定用户）
         if with_examples:
-            self._add_example_data()
+            if not user_id:
+                self.stdout.write(self.style.ERROR(
+                    '\n⚠ 添加示例数据需要指定 --user-id 参数'
+                ))
+            else:
+                self._add_example_data(user_id, force)
 
         # 4. 验证配置
         self._verify_configuration()
@@ -52,8 +64,82 @@ class Command(BaseCommand):
 
         self._print_next_steps()
 
-    def _init_prompt_library(self, force):
-        """初始化提示词库"""
+    def _create_directories(self):
+        """创建必要的目录"""
+        import os
+        from pathlib import Path
+        from django.conf import settings
+
+        self.stdout.write('\n📁 正在创建必要的目录...')
+
+        directories = [
+            settings.BASE_DIR / 'logs',
+            settings.BASE_DIR / 'media',
+            settings.BASE_DIR / 'staticfiles',
+        ]
+
+        created_count = 0
+        for directory in directories:
+            if not directory.exists():
+                directory.mkdir(parents=True, exist_ok=True)
+                created_count += 1
+                self.stdout.write(self.style.SUCCESS(f'  ✓ 创建目录: {directory.name}'))
+            else:
+                self.stdout.write(self.style.WARNING(f'  - 目录已存在: {directory.name}'))
+
+        if created_count == 0:
+            self.stdout.write(self.style.WARNING('  - 所有目录已存在'))
+
+    def _create_admin_user(self):
+        """创建管理员账号"""
+        import os
+        from django.contrib.auth.models import User
+
+        self.stdout.write('\n👤 正在检查管理员账号...')
+
+        # 从环境变量读取管理员配置
+        admin_username = os.getenv('ADMIN_USERNAME', 'admin')
+        admin_password = os.getenv('ADMIN_PASSWORD', 'admin123')
+        admin_email = os.getenv('ADMIN_EMAIL', 'admin@example.com')
+
+        # 检查管理员是否已存在
+        if User.objects.filter(username=admin_username).exists():
+            self.stdout.write(self.style.WARNING(f'  - 管理员账号已存在: {admin_username}'))
+            self.stdout.write(f'    如需重置密码，请使用: python manage.py changepassword {admin_username}')
+        else:
+            # 创建管理员账号
+            User.objects.create_superuser(
+                username=admin_username,
+                email=admin_email,
+                password=admin_password
+            )
+            self.stdout.write(self.style.SUCCESS(f'  ✓ 管理员账号创建成功'))
+            self.stdout.write(f'    用户名: {admin_username}')
+            self.stdout.write(f'    密码: {admin_password}')
+            self.stdout.write(self.style.WARNING('    ⚠ 请及时修改默认密码！'))
+
+    def _add_example_data(self, user_id: str, force: bool):
+        """添加示例数据"""
+        self.stdout.write(f'\n🎯 正在为用户 {user_id} 添加示例数据...')
+
+        # 获取或创建用户
+        chat_user = ChatUser.get_or_create_by_webhook(
+            user_id=user_id,
+            username=f'示例用户_{user_id}'
+        )
+        self.stdout.write(self.style.SUCCESS(f'  ✓ 用户: {chat_user}'))
+
+        # 初始化该用户的提示词库
+        self._init_user_prompts(chat_user, force)
+
+        # 添加示例记忆
+        self._add_example_memories(chat_user, force)
+
+        # 添加示例计划任务
+        self._add_example_tasks(chat_user, force)
+
+    def _init_user_prompts(self, user: ChatUser, force: bool):
+        """为用户初始化提示词库"""
         self.stdout.write('\n📚 正在初始化提示词库...')
 
         # 默认人物设定
@@ -77,9 +163,10 @@ class Command(BaseCommand):
 """
 
         if force:
-            PromptLibrary.objects.filter(category='character', key='main_character').delete()
+            PromptLibrary.objects.filter(user=user, category='character', key='main_character').delete()
 
         prompt, created = PromptLibrary.objects.get_or_create(
+            user=user,
             category='character',
             key='main_character',
             defaults={
@@ -194,9 +281,10 @@ class Command(BaseCommand):
         created_count = 0
         for prompt_data in system_prompts:
             if force:
-                PromptLibrary.objects.filter(category='system', key=prompt_data['key']).delete()
+                PromptLibrary.objects.filter(user=user, category='system', key=prompt_data['key']).delete()
 
             prompt, created = PromptLibrary.objects.get_or_create(
+                user=user,
                 category='system',
                 key=prompt_data['key'],
                 defaults={
@@ -218,37 +306,8 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(f'  ✓ 共创建 {created_count} 个系统提示词'))
 
-    def _create_directories(self):
-        """创建必要的目录"""
-        import os
-        from pathlib import Path
-        from django.conf import settings
-
-        self.stdout.write('\n📁 正在创建必要的目录...')
-
-        directories = [
-            settings.BASE_DIR / 'logs',
-            settings.BASE_DIR / 'media',
-            settings.BASE_DIR / 'staticfiles',
-        ]
-
-        created_count = 0
-        for directory in directories:
-            if not directory.exists():
-                directory.mkdir(parents=True, exist_ok=True)
-                created_count += 1
-                self.stdout.write(self.style.SUCCESS(f'  ✓ 创建目录: {directory.name}'))
-            else:
-                self.stdout.write(self.style.WARNING(f'  - 目录已存在: {directory.name}'))
-
-        if created_count == 0:
-            self.stdout.write(self.style.WARNING('  - 所有目录已存在'))
-
-    def _add_example_data(self):
-        """添加示例数据"""
-        self.stdout.write('\n🎯 正在添加示例数据...')
-
-        # 添加示例记忆
+    def _add_example_memories(self, user: ChatUser, force: bool):
+        """添加示例记忆"""
         example_memories = [
             {
                 'title': '用户喜欢喝咖啡',
@@ -267,9 +326,13 @@ class Command(BaseCommand):
             },
         ]
 
+        if force:
+            MemoryLibrary.objects.filter(user=user).delete()
+
         memory_count = 0
         for memory_data in example_memories:
             memory, created = MemoryLibrary.objects.get_or_create(
+                user=user,
                 title=memory_data['title'],
                 defaults=memory_data
             )
@@ -278,7 +341,8 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f'  ✓ 添加 {memory_count} 条示例记忆'))
 
-        # 添加示例计划任务
+    def _add_example_tasks(self, user: ChatUser, force: bool):
+        """添加示例计划任务"""
         tomorrow = timezone.now() + timedelta(days=1)
         example_tasks = [
             {
@@ -295,9 +359,13 @@ class Command(BaseCommand):
             },
         ]
 
+        if force:
+            PlannedTask.objects.filter(user=user).delete()
+
         task_count = 0
         for task_data in example_tasks:
             task, created = PlannedTask.objects.get_or_create(
+                user=user,
                 title=task_data['title'],
                 scheduled_time=task_data['scheduled_time'],
                 defaults=task_data
@@ -358,4 +426,6 @@ class Command(BaseCommand):
         self.stdout.write('   curl http://localhost:8000/api/webhook/status/')
         self.stdout.write('\n5. 查看系统状态:')
         self.stdout.write('   curl http://localhost:8000/api/status/')
+        self.stdout.write('\n6. 为用户初始化示例数据:')
+        self.stdout.write('   python manage.py init_system --with-examples --user-id <用户ID>')
         self.stdout.write('')
