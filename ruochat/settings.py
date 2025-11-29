@@ -134,7 +134,6 @@ OPENAI_API_BASE = os.getenv('OPENAI_API_BASE', '')  # 自定义 API Base URL
 # Webhook 配置（Synology Chat 或其他服务）
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')  # 发送消息的 Webhook URL
 WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', '')  # 验证 token（可选）
-WEBHOOK_USER_IDS = os.getenv('WEBHOOK_USER_IDS', '')  # 默认接收用户ID，逗号分隔
 
 # APScheduler 配置
 SCHEDULER_CONFIG = {

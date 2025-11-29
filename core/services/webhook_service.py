@@ -26,22 +26,13 @@ class WebhookService:
         self.enabled = bool(self.webhook_url)
         self.message_callback: Optional[Callable] = None
 
-        # 解析默认用户ID列表
-        user_ids_str = getattr(settings, 'WEBHOOK_USER_IDS', '')
-        self.default_user_ids = []
-        if user_ids_str:
-            try:
-                self.default_user_ids = [int(uid.strip()) for uid in user_ids_str.split(',') if uid.strip().isdigit()]
-            except Exception as e:
-                logger.error(f"解析 WEBHOOK_USER_IDS 失败: {e}")
-
         # 创建带重试机制的 session
         self.session = self._create_session()
 
         if not self.enabled:
             logger.warning("Webhook 服务未配置，请在 .env 中设置 WEBHOOK_URL")
         else:
-            logger.info(f"Webhook 服务已启用，默认用户ID: {self.default_user_ids}")
+            logger.info("Webhook 服务已启用")
 
     def _create_session(self) -> requests.Session:
         """创建带重试机制的 requests session"""
@@ -118,7 +109,7 @@ class WebhookService:
 
         Args:
             content: 消息内容
-            user_ids: 用户ID列表（可选，不指定则使用默认配置）
+            user_ids: 用户ID列表（必须指定）
 
         Returns:
             bool: 是否发送成功
@@ -133,13 +124,11 @@ class WebhookService:
                 "text": content
             }
 
-            # 确定目标用户ID
-            target_user_ids = user_ids or self.default_user_ids
-
-            if target_user_ids:
-                payload["user_ids"] = target_user_ids
+            if user_ids:
+                payload["user_ids"] = user_ids
             else:
-                logger.warning("未指定目标用户ID，消息可能发送失败")
+                logger.error("未指定目标用户ID，无法发送消息")
+                return False
 
             # 发送请求
             result = self._send_webhook(payload)
@@ -328,9 +317,12 @@ class WebhookService:
         except Exception as e:
             logger.error(f"保存发送消息失败: {e}")
 
-    def test_connection(self) -> bool:
+    def test_connection(self, test_user_id: Optional[int] = None) -> bool:
         """
         测试 Webhook 连接
+
+        Args:
+            test_user_id: 测试用的用户ID（必须指定）
 
         Returns:
             bool: 连接是否成功
@@ -338,8 +330,12 @@ class WebhookService:
         if not self.enabled:
             return False
 
+        if not test_user_id:
+            logger.error("测试连接需要指定用户ID")
+            return False
+
         try:
-            result = self.send_message("RuoChat Webhook 连接测试")
+            result = self.send_message("RuoChat Webhook 连接测试", user_ids=[test_user_id])
             return result
         except Exception as e:
             logger.error(f"连接测试失败: {e}")

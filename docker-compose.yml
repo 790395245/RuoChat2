@@ -97,3 +97,6 @@ volumes:
 networks:
   ruochat_network:
     driver: bridge
+
+
+#  docker compose exec web python manage.py init_system --with-examples --user-id <用户ID>

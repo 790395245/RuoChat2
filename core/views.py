@@ -96,7 +96,7 @@ def add_hotspot(request):
 
         # 使用AI判断是否值得记忆
         ai_service = AIService()
-        is_memorable = ai_service.judge_hotspot_memorable(title, content)
+        is_memorable = ai_service.judge_hotspot_memorable(chat_user, title, content)
 
         if is_memorable:
             memory = MemoryLibrary.objects.create(

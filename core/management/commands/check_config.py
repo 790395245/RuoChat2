@@ -131,7 +131,6 @@ class Command(BaseCommand):
         self.stdout.write('\n💬 检查Webhook配置...')
 
         webhook_url = getattr(settings, 'WEBHOOK_URL', '')
-        webhook_user_ids = getattr(settings, 'WEBHOOK_USER_IDS', '')
 
         if webhook_url:
             self.stdout.write(self.style.SUCCESS('  ✓ WEBHOOK_URL: 已配置'))
@@ -142,12 +141,6 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR('  ✗ WEBHOOK_URL: 未配置'))
             self.stdout.write('    请在.env中设置 WEBHOOK_URL')
             return False
-
-        if webhook_user_ids:
-            self.stdout.write(self.style.SUCCESS(f'  ✓ WEBHOOK_USER_IDS: {webhook_user_ids}'))
-        else:
-            self.stdout.write(self.style.WARNING('  ⚠ WEBHOOK_USER_IDS: 未配置'))
-            self.stdout.write('    建议在.env中设置默认接收用户ID')
 
         return True
 

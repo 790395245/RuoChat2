@@ -103,7 +103,7 @@ def _determine_receiver(task: ReplyTask) -> Optional[list]:
         task: 回复任务对象
 
     Returns:
-        Optional[list]: 接收者用户ID列表，None表示使用默认配置
+        Optional[list]: 接收者用户ID列表
     """
     try:
         # 从任务上下文中获取接收者信息
@@ -115,8 +115,22 @@ def _determine_receiver(task: ReplyTask) -> Optional[list]:
             if user_id:
                 return [int(user_id)] if isinstance(user_id, (str, int)) else None
 
-        # 自主触发的任务或未找到特定用户ID时，使用默认用户ID列表
-        # webhook_service 会自动使用 WEBHOOK_USER_IDS 配置
+        # 自主触发的任务，使用任务所属用户的 user_id
+        if task.trigger_type == 'autonomous' and task.user:
+            try:
+                return [int(task.user.user_id)]
+            except (ValueError, TypeError):
+                logger.error(f"无效的用户ID: {task.user.user_id}")
+                return None
+
+        # 未找到特定用户ID时，尝试从任务所属用户获取
+        if task.user:
+            try:
+                return [int(task.user.user_id)]
+            except (ValueError, TypeError):
+                logger.error(f"无效的用户ID: {task.user.user_id}")
+                return None
+
         return None
 
     except Exception as e:

@@ -57,7 +57,22 @@ class PromptLibrary(models.Model):
         ('character', '人物设定'),
         ('system', '系统提示词'),
         ('template', '回复模板'),
+        ('reply_decision', '回复决策'),
+        ('memory_detection', '记忆检测'),
+        ('daily_planning', '每日计划'),
+        ('autonomous_message', '自主消息'),
+        ('hotspot_judge', '热点判断'),
     ]
+
+    # 预定义的提示词 key
+    PROMPT_KEYS = {
+        'character': 'default_character',
+        'reply_decision': 'reply_decision_prompt',
+        'memory_detection': 'memory_detection_prompt',
+        'daily_planning': 'daily_planning_prompt',
+        'autonomous_message': 'autonomous_message_prompt',
+        'hotspot_judge': 'hotspot_judge_prompt',
+    }
 
     user = models.ForeignKey(
         ChatUser,
@@ -69,7 +84,8 @@ class PromptLibrary(models.Model):
     key = models.CharField('唯一标识', max_length=100)
     content = models.TextField('提示词内容')
     is_active = models.BooleanField('是否激活', default=True, db_index=True)
-    metadata = models.JSONField('元数据', default=dict, blank=True)
+    metadata = models.JSONField('元数据', default=dict, blank=True,
+                                help_text='可存储变量说明、示例等额外信息')
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
     updated_at = models.DateTimeField('更新时间', auto_now=True)
 
@@ -87,6 +103,25 @@ class PromptLibrary(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.get_category_display()} - {self.key}"
+
+    @classmethod
+    def get_prompt(cls, user, category: str, default: str = '') -> str:
+        """获取指定用户和类别的提示词"""
+        prompt = cls.objects.filter(
+            user=user,
+            category=category,
+            is_active=True
+        ).first()
+        return prompt.content if prompt else default
+
+    @classmethod
+    def get_system_prompt(cls, category: str, default: str = '') -> str:
+        """获取系统级提示词（不关联用户）"""
+        prompt = cls.objects.filter(
+            category=category,
+            is_active=True
+        ).first()
+        return prompt.content if prompt else default
 
 
 class MemoryLibrary(models.Model):

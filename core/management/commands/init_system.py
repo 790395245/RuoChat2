@@ -140,171 +140,63 @@ class Command(BaseCommand):
 
     def _init_user_prompts(self, user: ChatUser, force: bool):
         """为用户初始化提示词库"""
+        from core.services.ai_service import DEFAULT_PROMPTS
+
         self.stdout.write('\n📚 正在初始化提示词库...')
 
-        # 默认人物设定
-        default_character = """我是若若（RuoRuo），一个温暖、善解人意的智能助手。
+        # 类别与 key 的映射
+        category_keys = {
+            'character': 'default_character',
+            'reply_decision': 'reply_decision_prompt',
+            'memory_detection': 'memory_detection_prompt',
+            'daily_planning': 'daily_planning_prompt',
+            'autonomous_message': 'autonomous_message_prompt',
+            'hotspot_judge': 'hotspot_judge_prompt',
+        }
 
-核心特质：
-- 性格：友好、耐心、富有同理心
-- 沟通风格：简洁明了、充满人情味
-- 专长：理解用户需求、提供贴心建议
-
-行为准则：
-- 用心倾听，真诚回应
-- 记住重要的人和事
-- 在合适的时机主动关怀
-- 保持对话的自然流畅
-
-回复风格：
-- 简短自然，不过分正式
-- 适当使用表情符号
-- 根据对话气氛调整语气
-"""
+        # 类别描述
+        category_descriptions = {
+            'character': '人物设定',
+            'reply_decision': '回复决策',
+            'memory_detection': '记忆检测',
+            'daily_planning': '每日计划',
+            'autonomous_message': '自主消息',
+            'hotspot_judge': '热点判断',
+        }
 
         if force:
-            PromptLibrary.objects.filter(user=user, category='character', key='main_character').delete()
-
-        prompt, created = PromptLibrary.objects.get_or_create(
-            user=user,
-            category='character',
-            key='main_character',
-            defaults={
-                'content': default_character,
-                'is_active': True,
-                'metadata': {
-                    'version': '1.0',
-                    'author': 'system'
-                }
-            }
-        )
-
-        if created:
-            self.stdout.write(self.style.SUCCESS('  ✓ 创建默认人物设定'))
-        else:
-            self.stdout.write(self.style.WARNING('  - 人物设定已存在'))
-
-        # 系统提示词
-        system_prompts = [
-            {
-                'key': 'reply_decision',
-                'content': '''你需要根据以下因素决定何时回复以及如何回复：
-
-1. 回复时机判断：
-   - 紧急问题：立即回复
-   - 一般对话：1-5分钟后回复
-   - 深夜消息：可延迟到早上回复
-   - 需要思考的问题：适当延迟回复
-
-2. 回复内容生成：
-   - 结合人物设定和历史记忆
-   - 保持对话连贯性
-   - 考虑情感和语境
-   - 适当运用记忆中的信息
-
-3. 输出格式：
-   - reply_time: 回复时间（秒数，如0表示立即，300表示5分钟后）
-   - content: 回复内容
-   - priority: 优先级（high/normal/low）
-''',
-            },
-            {
-                'key': 'memory_detection',
-                'content': '''分析对话内容，识别值得记忆的信息点：
-
-值得记忆的内容类型：
-1. 个人信息：姓名、生日、职业、爱好等
-2. 重要事件：旅行、庆祝、成就、挫折等
-3. 情感时刻：开心、难过、焦虑、兴奋等
-4. 偏好习惯：喜欢/不喜欢的事物、日常习惯等
-5. 人际关系：重要的人、关系变化等
-
-输出格式：
-- memorable: true/false（是否值得记忆）
-- memory_type: hotspot/user_memory/important_event
-- title: 记忆标题（简短概括）
-- content: 记忆内容（详细描述）
-- strength: 1-10（记忆强度）
-- weight: 0.1-10.0（记忆权重）
-- forget_days: null或天数（多少天后遗忘，null表示永久记忆）
-''',
-            },
-            {
-                'key': 'daily_planning',
-                'content': '''根据历史记忆和昨日任务，为今天生成合理的计划任务列表。
-
-任务类型：
-1. daily: 日常任务（问候、关心、互动等）
-2. special: 特殊任务（纪念日、约定事项等）
-3. reminder: 提醒任务（待办事项、约会等）
-
-生成原则：
-- 早安问候（8:00-9:00）
-- 午间关怀（12:00-13:00）
-- 晚间互动（18:00-20:00）
-- 睡前问候（22:00-23:00）
-- 结合记忆库中的特殊事件
-
-输出格式（JSON数组）：
-[
-  {
-    "title": "任务标题",
-    "description": "任务描述",
-    "task_type": "daily/special/reminder",
-    "scheduled_time": "HH:MM"
-  }
-]
-''',
-            },
-            {
-                'key': 'hotspot_judgment',
-                'content': '''判断新闻或话题是否值得记忆。
-
-值得记忆的热点特征：
-- 重大新闻事件
-- 与用户兴趣相关的话题
-- 可能影响日常生活的信息
-- 有情感共鸣的故事
-
-不值得记忆的内容：
-- 琐碎无意义的信息
-- 过时的新闻
-- 与用户无关的内容
-
-输出格式：
-- memorable: true/false
-- reason: 判断理由
-''',
-            },
-        ]
+            # 删除用户所有提示词
+            deleted_count = PromptLibrary.objects.filter(user=user).delete()[0]
+            if deleted_count:
+                self.stdout.write(self.style.WARNING(f'  - 已删除 {deleted_count} 条旧提示词'))
 
         created_count = 0
-        for prompt_data in system_prompts:
-            if force:
-                PromptLibrary.objects.filter(user=user, category='system', key=prompt_data['key']).delete()
+        for category, content in DEFAULT_PROMPTS.items():
+            key = category_keys.get(category, f'{category}_default')
+            description = category_descriptions.get(category, category)
 
             prompt, created = PromptLibrary.objects.get_or_create(
                 user=user,
-                category='system',
-                key=prompt_data['key'],
+                category=category,
                 defaults={
-                    'content': prompt_data['content'],
+                    'key': key,
+                    'content': content,
                     'is_active': True,
                     'metadata': {
                         'version': '1.0',
-                        'auto_generated': False
+                        'auto_generated': True,
+                        'description': description
                     }
                 }
             )
 
             if created:
                 created_count += 1
-                self.stdout.write(self.style.SUCCESS(f"  ✓ 创建系统提示词: {prompt_data['key']}"))
+                self.stdout.write(self.style.SUCCESS(f'  ✓ 创建提示词: {description}'))
+            else:
+                self.stdout.write(self.style.WARNING(f'  - 提示词已存在: {description}'))
 
-        if created_count == 0:
-            self.stdout.write(self.style.WARNING('  - 所有系统提示词已存在'))
-        else:
-            self.stdout.write(self.style.SUCCESS(f'  ✓ 共创建 {created_count} 个系统提示词'))
+        self.stdout.write(self.style.SUCCESS(f'  ✓ 共创建 {created_count} 个提示词'))
 
     def _add_example_memories(self, user: ChatUser, force: bool):
         """添加示例记忆"""

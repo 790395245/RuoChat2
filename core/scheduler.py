@@ -126,7 +126,7 @@ def generate_daily_planned_tasks(user):
 
         # AI生成计划任务
         ai_service = AIService()
-        tasks = ai_service.generate_daily_planned_tasks(context)
+        tasks = ai_service.generate_daily_planned_tasks(user, context)
 
         # 批量创建任务
         created_count = 0
@@ -201,7 +201,7 @@ def generate_autonomous_messages(user):
 
         # AI生成自主消息
         ai_service = AIService()
-        messages = ai_service.generate_autonomous_messages(context)
+        messages = ai_service.generate_autonomous_messages(user, context)
 
         # 批量创建回复任务
         created_count = 0

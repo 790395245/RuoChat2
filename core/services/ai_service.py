@@ -8,6 +8,78 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 
+# 默认提示词模板（当数据库中没有配置时使用）
+DEFAULT_PROMPTS = {
+    'character': '你是一个智能助手，友好、热情、有耐心。',
+
+    'reply_decision': '''当前时间：{current_time}
+
+你需要决定如何回复消息，以及何时回复。
+
+请根据以下信息决定回复：
+- 发送者：{sender}
+- 接收到的消息：{message}
+- 相关上下文：
+{context}
+
+请提供：
+1. 回复内容（符合人物设定的自然回复）
+2. 回复时间（立即回复设为0，延迟回复设为分钟数，如5表示5分钟后回复）
+
+请以JSON格式返回：{{"content": "回复内容", "delay_minutes": 0}}''',
+
+    'memory_detection': '''你需要判断对话中是否存在值得记忆的点（重要信息、情感时刻、特殊事件等）。
+
+对话信息：
+- 发送者：{sender}
+- 消息内容：{message}
+- 相关上下文：
+{context}
+
+请判断是否存在记忆点，如果存在，请提供：
+1. 记忆标题（简短概括）
+2. 记忆内容（详细描述）
+3. 记忆强度（1-10，10最重要）
+4. 记忆权重（0.1-10.0，影响检索优先级）
+5. 遗忘天数（多少天后遗忘，0表示永不遗忘）
+
+请以JSON格式返回：
+- 如果没有记忆点：{{"has_memory": false}}
+- 如果有记忆点：{{"has_memory": true, "title": "标题", "content": "内容", "strength": 5, "weight": 1.0, "forget_days": 30}}''',
+
+    'daily_planning': '''今天是{date}
+
+请根据以下上下文，为今天生成计划任务列表（3-8个任务）：
+{context}
+
+每个任务包含：
+1. 任务标题
+2. 任务描述
+3. 任务类型（daily=日常任务/special=特殊任务/reminder=提醒任务）
+4. 计划时间（HH:MM格式）
+
+请以JSON格式返回：{{"tasks": [{{"title": "标题", "description": "描述", "task_type": "daily", "time": "09:00"}}]}}''',
+
+    'autonomous_message': '''今天是{date}
+
+请根据以下上下文，生成今天需要主动发送的关怀消息（1-5条）：
+{context}
+
+每条消息包含：
+1. 消息内容（自然、温暖的问候或关心）
+2. 发送时间（HH:MM格式，分布在全天合适的时间段）
+
+请以JSON格式返回：{{"messages": [{{"content": "消息内容", "time": "09:00"}}]}}''',
+
+    'hotspot_judge': '''请判断以下热点话题是否值得记忆（与用户的兴趣、经历相关，或对用户有重要意义）。
+
+热点标题：{title}
+热点内容：{content}
+
+只回答"是"或"否"。''',
+}
+
+
 class AIService:
     """AI决策服务 - 集成OpenAI API实现各种AI判断节点"""
 
@@ -25,6 +97,36 @@ class AIService:
         self.client = OpenAI(**client_kwargs)
         self.model = settings.OPENAI_MODEL
 
+    def _get_prompt(self, user, category: str) -> str:
+        """
+        获取提示词，优先从数据库读取，否则使用默认值
+
+        Args:
+            user: ChatUser 对象
+            category: 提示词类别
+
+        Returns:
+            str: 提示词内容
+        """
+        from core.models import PromptLibrary
+
+        # 优先获取用户专属的提示词
+        prompt = PromptLibrary.objects.filter(
+            user=user,
+            category=category,
+            is_active=True
+        ).first()
+
+        if prompt:
+            return prompt.content
+
+        # 返回默认提示词
+        return DEFAULT_PROMPTS.get(category, '')
+
+    def _get_character_prompt(self, user) -> str:
+        """获取人物设定"""
+        return self._get_prompt(user, 'character')
+
     def _call_openai(self, messages: List[Dict], temperature: float = 0.7) -> str:
         """调用OpenAI API"""
         try:
@@ -38,29 +140,27 @@ class AIService:
             logger.error(f"OpenAI API调用失败: {e}")
             raise
 
-    def judge_hotspot_memorable(self, title: str, content: str) -> bool:
+    def judge_hotspot_memorable(self, user, title: str, content: str) -> bool:
         """
         AI判断：热点是否值得记忆
 
         Args:
+            user: ChatUser 对象
             title: 热点标题
             content: 热点内容
 
         Returns:
             bool: 是否值得记忆
         """
-        from core.models import PromptLibrary
+        character_setting = self._get_character_prompt(user)
+        hotspot_prompt = self._get_prompt(user, 'hotspot_judge')
 
-        # 获取人物设定
-        character_prompt = PromptLibrary.objects.filter(
-            category='character', is_active=True
-        ).first()
-
-        character_setting = character_prompt.content if character_prompt else "你是一个智能助手"
+        # 替换变量
+        user_prompt = hotspot_prompt.format(title=title, content=content)
 
         messages = [
             {"role": "system", "content": f"{character_setting}\n\n你需要判断一个热点话题是否值得记忆。"},
-            {"role": "user", "content": f"热点标题：{title}\n\n热点内容：{content}\n\n请判断这个热点是否值得记忆（与我的兴趣、经历相关，或对我有重要意义）。只回答'是'或'否'。"}
+            {"role": "user", "content": user_prompt}
         ]
 
         try:
@@ -72,6 +172,7 @@ class AIService:
 
     def decide_reply_content_and_timing(
         self,
+        user,
         message_content: str,
         sender: str,
         context: Dict
@@ -80,6 +181,7 @@ class AIService:
         AI判断：回复内容和回复时间
 
         Args:
+            user: ChatUser 对象
             message_content: 接收到的消息内容
             sender: 发送者
             context: 上下文信息（包含记忆、历史消息等）
@@ -87,21 +189,24 @@ class AIService:
         Returns:
             Tuple[str, datetime]: (回复内容, 计划回复时间)
         """
-        from core.models import PromptLibrary
-
-        # 获取人物设定和回复模板
-        character_prompt = PromptLibrary.objects.filter(
-            category='character', is_active=True
-        ).first()
-
-        character_setting = character_prompt.content if character_prompt else "你是一个智能助手"
+        character_setting = self._get_character_prompt(user)
+        reply_prompt = self._get_prompt(user, 'reply_decision')
 
         # 构建上下文信息
         context_str = self._format_context(context)
+        current_time = datetime.now().strftime('%Y年%m月%d日 %H:%M:%S %A')
+
+        # 替换变量
+        user_prompt = reply_prompt.format(
+            sender=sender,
+            message=message_content,
+            context=context_str,
+            current_time=current_time
+        )
 
         messages = [
-            {"role": "system", "content": f"{character_setting}\n\n你需要决定如何回复消息，以及何时回复（立即/延迟几分钟）。"},
-            {"role": "user", "content": f"发送者：{sender}\n\n接收到的消息：{message_content}\n\n相关上下文：\n{context_str}\n\n请提供：\n1. 回复内容\n2. 回复时间（格式：立即 或 延迟X分钟）\n\n请以JSON格式返回：{{\"content\": \"回复内容\", \"delay_minutes\": 0}}"}
+            {"role": "system", "content": f"{character_setting}\n\n{self._get_prompt(user, 'system') or '你需要决定如何回复消息。'}"},
+            {"role": "user", "content": user_prompt}
         ]
 
         try:
@@ -124,6 +229,7 @@ class AIService:
 
     def detect_memory_points(
         self,
+        user,
         message_content: str,
         sender: str,
         context: Dict
@@ -132,6 +238,7 @@ class AIService:
         AI判断：是否存在记忆点
 
         Args:
+            user: ChatUser 对象
             message_content: 消息内容
             sender: 发送者
             context: 上下文信息
@@ -140,19 +247,21 @@ class AIService:
             Optional[Dict]: 记忆点信息（包含title, content, strength, weight, forget_time）
                           如果没有记忆点则返回None
         """
-        from core.models import PromptLibrary
-
-        character_prompt = PromptLibrary.objects.filter(
-            category='character', is_active=True
-        ).first()
-
-        character_setting = character_prompt.content if character_prompt else "你是一个智能助手"
+        character_setting = self._get_character_prompt(user)
+        memory_prompt = self._get_prompt(user, 'memory_detection')
 
         context_str = self._format_context(context)
 
+        # 替换变量
+        user_prompt = memory_prompt.format(
+            sender=sender,
+            message=message_content,
+            context=context_str
+        )
+
         messages = [
-            {"role": "system", "content": f"{character_setting}\n\n你需要判断对话中是否存在值得记忆的点（重要信息、情感时刻、特殊事件等）。"},
-            {"role": "user", "content": f"发送者：{sender}\n\n消息内容：{message_content}\n\n相关上下文：\n{context_str}\n\n请判断是否存在记忆点，如果存在，请提供：\n1. 记忆标题\n2. 记忆内容\n3. 记忆强度（1-10）\n4. 记忆权重（0.1-10.0）\n5. 遗忘天数（多少天后遗忘，0表示永不遗忘）\n\n请以JSON格式返回：{{\"has_memory\": true, \"title\": \"标题\", \"content\": \"内容\", \"strength\": 5, \"weight\": 1.0, \"forget_days\": 30}}"}
+            {"role": "system", "content": f"{character_setting}\n\n你需要判断对话中是否存在值得记忆的点。"},
+            {"role": "user", "content": user_prompt}
         ]
 
         try:
@@ -180,29 +289,32 @@ class AIService:
             logger.error(f"检测记忆点失败: {e}")
             return None
 
-    def generate_daily_planned_tasks(self, context: Dict) -> List[Dict]:
+    def generate_daily_planned_tasks(self, user, context: Dict) -> List[Dict]:
         """
         AI判断：生成全天计划任务（每日00:00执行）
 
         Args:
+            user: ChatUser 对象
             context: 上下文信息（记忆库、历史计划等）
 
         Returns:
             List[Dict]: 计划任务列表
         """
-        from core.models import PromptLibrary
-
-        character_prompt = PromptLibrary.objects.filter(
-            category='character', is_active=True
-        ).first()
-
-        character_setting = character_prompt.content if character_prompt else "你是一个智能助手"
+        character_setting = self._get_character_prompt(user)
+        planning_prompt = self._get_prompt(user, 'daily_planning')
 
         context_str = self._format_context(context)
+        date_str = datetime.now().strftime('%Y年%m月%d日 %A')
+
+        # 替换变量
+        user_prompt = planning_prompt.format(
+            date=date_str,
+            context=context_str
+        )
 
         messages = [
             {"role": "system", "content": f"{character_setting}\n\n你需要根据记忆和历史计划，为今天生成计划任务。"},
-            {"role": "user", "content": f"今天是{datetime.now().strftime('%Y年%m月%d日 %A')}\n\n相关上下文：\n{context_str}\n\n请生成今天的计划任务列表（3-8个任务），每个任务包含：\n1. 任务标题\n2. 任务描述\n3. 任务类型（daily/special/reminder）\n4. 计划时间（HH:MM格式）\n\n请以JSON格式返回：{{\"tasks\": [{{\"title\": \"标题\", \"description\": \"描述\", \"task_type\": \"daily\", \"time\": \"09:00\"}}]}}"}
+            {"role": "user", "content": user_prompt}
         ]
 
         try:
@@ -235,29 +347,32 @@ class AIService:
             logger.error(f"生成计划任务失败: {e}")
             return []
 
-    def generate_autonomous_messages(self, context: Dict) -> List[Dict]:
+    def generate_autonomous_messages(self, user, context: Dict) -> List[Dict]:
         """
         AI判断：生成全天的主动触发消息（每日00:05执行）
 
         Args:
+            user: ChatUser 对象
             context: 上下文信息（计划任务、记忆、历史消息等）
 
         Returns:
             List[Dict]: 自动回复任务列表
         """
-        from core.models import PromptLibrary
-
-        character_prompt = PromptLibrary.objects.filter(
-            category='character', is_active=True
-        ).first()
-
-        character_setting = character_prompt.content if character_prompt else "你是一个智能助手"
+        character_setting = self._get_character_prompt(user)
+        autonomous_prompt = self._get_prompt(user, 'autonomous_message')
 
         context_str = self._format_context(context)
+        date_str = datetime.now().strftime('%Y年%m月%d日 %A')
+
+        # 替换变量
+        user_prompt = autonomous_prompt.format(
+            date=date_str,
+            context=context_str
+        )
 
         messages = [
-            {"role": "system", "content": f"{character_setting}\n\n你需要根据今天的计划任务和记忆，生成主动发送的消息。"},
-            {"role": "user", "content": f"今天是{datetime.now().strftime('%Y年%m月%d日 %A')}\n\n相关上下文：\n{context_str}\n\n请生成今天需要主动发送的消息（1-5条），每条消息包含：\n1. 消息内容\n2. 发送时间（HH:MM格式）\n\n请以JSON格式返回：{{\"messages\": [{{\"content\": \"消息内容\", \"time\": \"09:00\"}}]}}"}
+            {"role": "system", "content": f"{character_setting}\n\n你需要根据今天的计划任务和记忆，生成主动发送的关怀消息。"},
+            {"role": "user", "content": user_prompt}
         ]
 
         try:

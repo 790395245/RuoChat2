@@ -55,6 +55,7 @@ class MessageHandler:
 
             # 步骤3：AI判断回复内容和回复时间
             reply_content, scheduled_time = self.ai_service.decide_reply_content_and_timing(
+                user=user,
                 message_content=content,
                 sender=sender,
                 context=context
@@ -87,6 +88,7 @@ class MessageHandler:
 
             # 步骤4：AI判断是否存在记忆点
             memory_info = self.ai_service.detect_memory_points(
+                user=user,
                 message_content=content,
                 sender=sender,
                 context=context
