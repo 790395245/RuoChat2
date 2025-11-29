@@ -231,37 +231,134 @@ def execute_pending_reply_tasks():
 
     阶段4：回复任务触发与发送
     1. 触发：回复任务计划触发
-    2. 执行：发送消息（从回复任务库）
-    3. 记录：发送的消息 → 写入消息记录库
+    2. 如果同一用户有多条待发送消息，通过AI整合为一条
+    3. 执行：发送消息（从回复任务库）
+    4. 记录：发送的消息 → 写入消息记录库
     """
     try:
-        from core.models import ReplyTask
+        from core.models import ReplyTask, MessageRecord
         from django.utils import timezone
+        from django.db import transaction
+        from collections import defaultdict
 
         # 查找到期的待执行任务（所有用户）
         now = timezone.now()
-        pending_tasks = ReplyTask.objects.filter(
-            status='pending',
-            scheduled_time__lte=now,
-            user__is_active=True  # 只处理活跃用户的任务
-        ).select_related('user').order_by('scheduled_time')[:10]  # 每次最多执行10个任务
 
-        if not pending_tasks.exists():
-            return
+        # 使用数据库事务和行级锁防止重复执行
+        with transaction.atomic():
+            # select_for_update + skip_locked: 锁定行，跳过已被锁定的行
+            pending_tasks = list(ReplyTask.objects.select_for_update(skip_locked=True).filter(
+                status='pending',
+                scheduled_time__lte=now,
+                user__is_active=True
+            ).select_related('user').order_by('scheduled_time')[:20])
 
-        logger.info(f"发现 {pending_tasks.count()} 个待执行的回复任务")
+            if not pending_tasks:
+                return
 
-        # 导入执行服务
-        from core.services.task_executor import execute_reply_task
+            # 立即标记为执行中，防止其他进程再次获取
+            task_ids = [t.id for t in pending_tasks]
+            ReplyTask.objects.filter(id__in=task_ids).update(status='executing')
 
+        # 按用户分组任务
+        tasks_by_user = defaultdict(list)
         for task in pending_tasks:
+            task.status = 'executing'  # 更新内存中的状态
+            tasks_by_user[task.user].append(task)
+
+        logger.info(f"发现 {len(pending_tasks)} 个待执行的回复任务，涉及 {len(tasks_by_user)} 个用户")
+
+        # 导入服务
+        from core.services.webhook_service import get_webhook_service
+        from core.services.ai_service import AIService
+
+        webhook = get_webhook_service()
+        ai_service = AIService()
+
+        for user, tasks in tasks_by_user.items():
             try:
-                execute_reply_task(task)
+                _execute_user_tasks(user, tasks, webhook, ai_service)
             except Exception as e:
-                logger.error(f"执行回复任务 #{task.id} (用户: {task.user}) 失败: {e}")
+                logger.error(f"执行用户 {user} 的回复任务失败: {e}", exc_info=True)
 
     except Exception as e:
         logger.error(f"执行待回复任务失败: {e}", exc_info=True)
+
+
+def _execute_user_tasks(user, tasks, webhook, ai_service):
+    """
+    执行单个用户的所有待发送任务
+
+    Args:
+        user: ChatUser 对象
+        tasks: 该用户的任务列表
+        webhook: Webhook 服务
+        ai_service: AI 服务
+    """
+    from core.models import MessageRecord
+    from django.utils import timezone
+
+    if not webhook.enabled:
+        logger.warning("Webhook 服务未启用，无法发送消息")
+        for task in tasks:
+            task.mark_failed("Webhook 服务未启用")
+        return
+
+    # 任务已在事务中标记为 executing，无需再次标记
+
+    # 获取所有消息内容
+    messages = [task.content for task in tasks]
+
+    # 如果有多条消息，通过AI整合
+    if len(messages) > 1:
+        logger.info(f"用户 {user} 有 {len(messages)} 条待发送消息，正在整合...")
+        merged_content = ai_service.merge_messages(user, messages)
+    else:
+        merged_content = messages[0]
+
+    # 确定接收者
+    try:
+        user_ids = [int(user.user_id)]
+    except (ValueError, TypeError):
+        logger.error(f"无效的用户ID: {user.user_id}")
+        for task in tasks:
+            task.mark_failed(f"无效的用户ID: {user.user_id}")
+        return
+
+    # 发送消息
+    success = webhook.send_message(merged_content, user_ids)
+
+    if success:
+        # 标记所有任务为已完成
+        for task in tasks:
+            task.mark_completed()
+
+        # 记录消息到数据库
+        MessageRecord.objects.create(
+            user=user,
+            message_type='sent',
+            sender='我',
+            receiver=str(user_ids),
+            content=merged_content,
+            timestamp=timezone.now(),
+            reply_task=tasks[0],  # 关联第一个任务
+            raw_data={
+                'merged_from_tasks': [t.id for t in tasks],
+                'original_messages': messages,
+            },
+        )
+
+        logger.info(f"用户 {user} 的 {len(tasks)} 条任务已整合发送完成")
+    else:
+        # 发送失败
+        for task in tasks:
+            task.mark_failed("消息发送失败")
+            # 重试逻辑
+            if task.retry_count < 3:
+                task.status = 'pending'
+                task.save(update_fields=['status'])
+
+        logger.error(f"用户 {user} 的消息发送失败")
 
 
 def stop_scheduler():

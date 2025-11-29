@@ -77,6 +77,21 @@ DEFAULT_PROMPTS = {
 热点内容：{content}
 
 只回答"是"或"否"。''',
+
+    'message_merge': '''当前时间：{current_time}
+
+你有多条待发送的消息需要整合成一条自然的消息。请将以下消息内容融合，保持整体语气一致、流畅自然，不要显得像是拼凑的。
+
+待整合的消息：
+{messages}
+
+要求：
+1. 保留所有消息的核心信息和情感
+2. 语气要自然连贯，像是一个人一次说完的话
+3. 可以适当调整顺序和措辞，但不要丢失重要内容
+4. 不要太长，控制在合理长度内
+
+请直接返回整合后的消息内容，不需要JSON格式。''',
 }
 
 
@@ -127,18 +142,63 @@ class AIService:
         """获取人物设定"""
         return self._get_prompt(user, 'character')
 
-    def _call_openai(self, messages: List[Dict], temperature: float = 0.7) -> str:
+    def _call_openai(self, messages: List[Dict], temperature: float = 0.7, caller: str = 'unknown') -> str:
         """调用OpenAI API"""
         try:
+            # 记录请求日志
+            self._log_request(messages, temperature, caller)
+
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=temperature,
             )
-            return response.choices[0].message.content.strip()
+            result = response.choices[0].message.content.strip()
+
+            # 记录响应日志
+            self._log_response(result, caller)
+
+            return result
         except Exception as e:
             logger.error(f"OpenAI API调用失败: {e}")
             raise
+
+    def _log_request(self, messages: List[Dict], temperature: float, caller: str):
+        """记录 AI 请求日志"""
+        separator = "=" * 60
+        logger.info(f"\n{separator}")
+        logger.info(f"[AI 请求] 调用方: {caller} | 模型: {self.model} | temperature: {temperature}")
+        logger.info(separator)
+
+        for i, msg in enumerate(messages):
+            role = msg.get('role', 'unknown').upper()
+            content = msg.get('content', '')
+
+            # 对于长内容，进行适当截断显示
+            if len(content) > 1500:
+                display_content = content[:1500] + f"\n... (内容过长，已截断，原始长度: {len(content)} 字符)"
+            else:
+                display_content = content
+
+            logger.info(f"\n[{role}]\n{display_content}")
+
+        logger.info(separator)
+
+    def _log_response(self, result: str, caller: str):
+        """记录 AI 响应日志"""
+        separator = "-" * 60
+        logger.info(f"\n{separator}")
+        logger.info(f"[AI 响应] 调用方: {caller}")
+        logger.info(separator)
+
+        # 对于长响应，进行适当截断显示
+        if len(result) > 2000:
+            display_result = result[:2000] + f"\n... (响应过长，已截断，原始长度: {len(result)} 字符)"
+        else:
+            display_result = result
+
+        logger.info(f"\n{display_result}")
+        logger.info(f"\n{'=' * 60}\n")
 
     def judge_hotspot_memorable(self, user, title: str, content: str) -> bool:
         """
@@ -164,7 +224,7 @@ class AIService:
         ]
 
         try:
-            result = self._call_openai(messages, temperature=0.3)
+            result = self._call_openai(messages, temperature=0.3, caller='热点判断')
             return '是' in result or 'yes' in result.lower()
         except Exception as e:
             logger.error(f"判断热点失败: {e}")
@@ -210,7 +270,7 @@ class AIService:
         ]
 
         try:
-            result = self._call_openai(messages, temperature=0.8)
+            result = self._call_openai(messages, temperature=0.8, caller='回复决策')
             # 解析JSON响应
             result_json = self._extract_json(result)
 
@@ -265,7 +325,7 @@ class AIService:
         ]
 
         try:
-            result = self._call_openai(messages, temperature=0.7)
+            result = self._call_openai(messages, temperature=0.7, caller='记忆检测')
             result_json = self._extract_json(result)
 
             if not result_json.get('has_memory', False):
@@ -318,7 +378,7 @@ class AIService:
         ]
 
         try:
-            result = self._call_openai(messages, temperature=0.8)
+            result = self._call_openai(messages, temperature=0.8, caller='每日计划')
             result_json = self._extract_json(result)
 
             tasks = []
@@ -376,7 +436,7 @@ class AIService:
         ]
 
         try:
-            result = self._call_openai(messages, temperature=0.8)
+            result = self._call_openai(messages, temperature=0.8, caller='自主消息')
             result_json = self._extract_json(result)
 
             messages_list = []
@@ -403,6 +463,54 @@ class AIService:
             logger.error(f"生成自动消息失败: {e}")
             return []
 
+    def merge_messages(self, user, messages: List[str]) -> str:
+        """
+        AI整合多条消息为一条自然的消息
+
+        Args:
+            user: ChatUser 对象
+            messages: 待整合的消息内容列表
+
+        Returns:
+            str: 整合后的消息内容
+        """
+        if not messages:
+            return ""
+
+        if len(messages) == 1:
+            return messages[0]
+
+        character_setting = self._get_character_prompt(user)
+        merge_prompt = self._get_prompt(user, 'message_merge')
+
+        current_time = datetime.now().strftime('%Y年%m月%d日 %H:%M:%S %A')
+
+        # 格式化消息列表
+        messages_text = "\n".join([f"{i+1}. {msg}" for i, msg in enumerate(messages)])
+
+        # 替换变量
+        user_prompt = merge_prompt.format(
+            current_time=current_time,
+            messages=messages_text
+        )
+
+        ai_messages = [
+            {"role": "system", "content": f"{character_setting}\n\n你需要将多条消息整合成一条自然流畅的消息。"},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        try:
+            result = self._call_openai(ai_messages, temperature=0.7, caller='消息整合')
+            merged_content = result.strip()
+
+            logger.info(f"成功整合 {len(messages)} 条消息")
+            return merged_content
+
+        except Exception as e:
+            logger.error(f"整合消息失败: {e}")
+            # 失败时简单拼接
+            return " ".join(messages)
+
     def _format_context(self, context: Dict) -> str:
         """格式化上下文信息为字符串"""
         formatted = []
@@ -419,8 +527,18 @@ class AIService:
 
         if 'planned_tasks' in context:
             formatted.append("\n## 今日计划：")
-            for task in context['planned_tasks'][:5]:  # 只取前5条
-                formatted.append(f"- {task.get('title', '')}: {task.get('description', '')}")
+            for task in context['planned_tasks']:  # 传递全部计划任务
+                scheduled_time = task.get('scheduled_time', '')
+                # 处理不同格式的时间
+                if hasattr(scheduled_time, 'strftime'):
+                    # datetime 对象
+                    time_str = scheduled_time.strftime('%H:%M')
+                elif isinstance(scheduled_time, str) and len(scheduled_time) >= 16:
+                    # 字符串格式 'YYYY-MM-DD HH:MM:SS'，提取 HH:MM
+                    time_str = scheduled_time[11:16]
+                else:
+                    time_str = str(scheduled_time)
+                formatted.append(f"- [{time_str}] {task.get('title', '')}: {task.get('description', '')}")
 
         if 'reply_tasks' in context:
             formatted.append("\n## 待回复任务：")

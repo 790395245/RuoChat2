@@ -327,6 +327,7 @@ class PromptLibraryAdmin(admin.ModelAdmin):
         'daily_planning': ['{date}', '{context}'],
         'autonomous_message': ['{date}', '{context}'],
         'hotspot_judge': ['{title}', '{content}'],
+        'message_merge': ['{current_time}', '{messages}'],
         'system': [],
         'template': [],
     }

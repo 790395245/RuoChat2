@@ -84,7 +84,7 @@ class ContextService:
                 'title': t.title,
                 'description': t.description,
                 'task_type': t.task_type,
-                'scheduled_time': t.scheduled_time.strftime('%Y-%m-%d %H:%M:%S'),
+                'scheduled_time': timezone.localtime(t.scheduled_time).strftime('%Y-%m-%d %H:%M:%S'),
             }
             for t in planned_tasks
         ]
@@ -101,7 +101,7 @@ class ContextService:
                 'id': t.id,
                 'trigger_type': t.trigger_type,
                 'content': t.content,
-                'scheduled_time': t.scheduled_time.strftime('%Y-%m-%d %H:%M:%S'),
+                'scheduled_time': timezone.localtime(t.scheduled_time).strftime('%Y-%m-%d %H:%M:%S'),
             }
             for t in reply_tasks
         ]
@@ -218,7 +218,7 @@ class ContextService:
                 'title': t.title,
                 'description': t.description,
                 'task_type': t.task_type,
-                'scheduled_time': t.scheduled_time.strftime('%Y-%m-%d %H:%M:%S'),
+                'scheduled_time': timezone.localtime(t.scheduled_time).strftime('%Y-%m-%d %H:%M:%S'),
             }
             for t in planned_tasks
         ]
@@ -253,7 +253,7 @@ class ContextService:
             {
                 'id': t.id,
                 'content': t.content,
-                'scheduled_time': t.scheduled_time.strftime('%Y-%m-%d %H:%M:%S'),
+                'scheduled_time': timezone.localtime(t.scheduled_time).strftime('%Y-%m-%d %H:%M:%S'),
             }
             for t in existing_reply_tasks
         ]
