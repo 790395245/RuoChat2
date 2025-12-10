@@ -48,11 +48,9 @@ class ContextService:
             for m in memories
         ]
 
-        # 2. 检索与该用户的历史消息
+        # 2. 检索该用户的历史消息（包含发送和接收的所有消息）
         recent_messages = MessageRecord.objects.filter(
             user=user
-        ).filter(
-            Q(sender=sender) | Q(receiver=sender)
         ).order_by('-timestamp')[:limit]
 
         context['recent_messages'] = [
@@ -340,3 +338,122 @@ class ContextService:
             }
             for m in memories
         ]
+
+    def get_emotion_context(self, user: 'ChatUser', hours: int = 24) -> Dict:
+        """
+        获取AI助手情绪相关上下文
+
+        Args:
+            user: 聊天用户对象
+            hours: 查询多少小时内的情绪记录
+
+        Returns:
+            Dict: 情绪上下文信息
+                - current_emotion: AI助手当前情绪状态
+                - emotion_trend: AI助手近期情绪趋势
+                - emotion_stats: 情绪统计
+        """
+        from core.models import EmotionRecord
+        from datetime import timedelta
+        from django.db.models import Avg, Count
+
+        context = {}
+        cutoff = timezone.now() - timedelta(hours=hours)
+
+        # 1. 获取当前情绪状态（最新一条记录）
+        current_emotion = EmotionRecord.objects.filter(user=user).first()
+        if current_emotion:
+            context['current_emotion'] = {
+                'emotion_type': current_emotion.emotion_type,
+                'emotion_type_display': current_emotion.get_emotion_type_display(),
+                'intensity': current_emotion.intensity,
+                'description': current_emotion.description,
+                'trigger_source': current_emotion.trigger_source,
+                'created_at': current_emotion.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+        else:
+            context['current_emotion'] = None
+
+        # 2. 获取近期情绪趋势
+        emotion_records = EmotionRecord.objects.filter(
+            user=user,
+            created_at__gte=cutoff
+        ).order_by('created_at')[:20]
+
+        context['emotion_trend'] = [
+            {
+                'emotion_type': e.emotion_type,
+                'intensity': e.intensity,
+                'trigger_source': e.trigger_source,
+                'created_at': e.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for e in emotion_records
+        ]
+
+        # 3. 情绪统计
+        emotion_stats = EmotionRecord.objects.filter(
+            user=user,
+            created_at__gte=cutoff
+        ).values('emotion_type').annotate(
+            count=Count('id'),
+            avg_intensity=Avg('intensity')
+        ).order_by('-count')
+
+        context['emotion_stats'] = list(emotion_stats)
+
+        # 4. 计算主导情绪
+        if context['emotion_stats']:
+            dominant = context['emotion_stats'][0]
+            context['dominant_emotion'] = {
+                'emotion_type': dominant['emotion_type'],
+                'count': dominant['count'],
+                'avg_intensity': round(dominant['avg_intensity'], 1) if dominant['avg_intensity'] else 0,
+            }
+        else:
+            context['dominant_emotion'] = None
+
+        logger.info(f"为用户 {user} 聚合AI情绪上下文：{len(context['emotion_trend'])}条记录")
+        return context
+
+    def get_message_merge_context(self, user: 'ChatUser') -> Dict:
+        """
+        获取消息合并所需的上下文（计划任务和情绪状态）
+
+        Args:
+            user: 聊天用户对象
+
+        Returns:
+            Dict: 聚合的上下文信息
+        """
+        from core.models import PlannedTask
+
+        context = {}
+
+        # 1. 检索该用户今日计划任务
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+
+        planned_tasks = PlannedTask.objects.filter(
+            user=user,
+            scheduled_time__gte=today_start,
+            scheduled_time__lt=today_end
+        ).order_by('scheduled_time')
+
+        context['planned_tasks'] = [
+            {
+                'id': t.id,
+                'title': t.title,
+                'description': t.description,
+                'task_type': t.task_type,
+                'status': t.status,
+                'scheduled_time': timezone.localtime(t.scheduled_time).strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for t in planned_tasks
+        ]
+
+        # 2. 获取情绪上下文
+        emotion_context = self.get_emotion_context(user, hours=24)
+        context['emotion'] = emotion_context
+
+        logger.info(f"为用户 {user} 聚合消息合并上下文：{len(context['planned_tasks'])}条计划任务")
+        return context

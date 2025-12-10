@@ -10,6 +10,8 @@ class ChatUser(models.Model):
     username = models.CharField('用户名', max_length=200, blank=True)
     nickname = models.CharField('昵称', max_length=200, blank=True)
     is_active = models.BooleanField('是否激活', default=True, db_index=True)
+    is_initialized = models.BooleanField('是否已初始化', default=False, db_index=True,
+                                         help_text='用户是否已完成引导流程（设定人物设定等）')
     metadata = models.JSONField('元数据', default=dict, blank=True,
                                 help_text='存储额外的用户信息')
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
@@ -50,6 +52,74 @@ class ChatUser(models.Model):
         return user
 
 
+class EmotionRecord(models.Model):
+    """情绪记录库 - 存储AI助手情绪状态变化"""
+
+    EMOTION_TYPE_CHOICES = [
+        ('happy', '开心'),
+        ('sad', '悲伤'),
+        ('angry', '愤怒'),
+        ('anxious', '焦虑'),
+        ('calm', '平静'),
+        ('excited', '兴奋'),
+        ('tired', '疲倦'),
+        ('neutral', '中性'),
+        ('worried', '担忧'),
+        ('grateful', '感激'),
+    ]
+
+    TRIGGER_SOURCE_CHOICES = [
+        ('user_message', '用户消息'),
+        ('system', '系统判断'),
+        ('time_decay', '时间衰减'),
+        ('daily_init', '每日初始化'),
+    ]
+
+    user = models.ForeignKey(
+        ChatUser,
+        on_delete=models.CASCADE,
+        related_name='emotions',
+        verbose_name='所属用户'
+    )
+    emotion_type = models.CharField('情绪类型', max_length=20, choices=EMOTION_TYPE_CHOICES, db_index=True)
+    intensity = models.IntegerField('情绪强度', default=5, help_text='情绪强度 1-10，10最强烈')
+    trigger_source = models.CharField('触发来源', max_length=20, choices=TRIGGER_SOURCE_CHOICES, db_index=True)
+    trigger_content = models.TextField('触发内容', blank=True, help_text='引发情绪变化的消息或事件')
+    description = models.TextField('情绪描述', blank=True, help_text='AI对当前情绪状态的描述')
+    metadata = models.JSONField('元数据', default=dict, blank=True,
+                                help_text='存储额外信息，如情绪变化原因等')
+    created_at = models.DateTimeField('创建时间', auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'emotion_record'
+        verbose_name = '情绪记录'
+        verbose_name_plural = '情绪记录'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['emotion_type', '-created_at']),
+            models.Index(fields=['user', 'emotion_type']),
+        ]
+
+    def __str__(self):
+        return f"{self.user} - {self.get_emotion_type_display()} ({self.intensity}/10)"
+
+    @classmethod
+    def get_current_emotion(cls, user) -> 'EmotionRecord':
+        """获取AI助手当前情绪状态（最新一条记录）"""
+        return cls.objects.filter(user=user).first()
+
+    @classmethod
+    def get_emotion_trend(cls, user, hours: int = 24) -> list:
+        """获取AI助手近期情绪趋势"""
+        from datetime import timedelta
+        cutoff = timezone.now() - timedelta(hours=hours)
+        return list(cls.objects.filter(
+            user=user,
+            created_at__gte=cutoff
+        ).order_by('created_at').values('emotion_type', 'intensity', 'created_at'))
+
+
 class PromptLibrary(models.Model):
     """提示词库 - 存储人物设定和系统提示词"""
 
@@ -62,6 +132,8 @@ class PromptLibrary(models.Model):
         ('daily_planning', '每日计划'),
         ('autonomous_message', '自主消息'),
         ('hotspot_judge', '热点判断'),
+        ('emotion_analysis', '情绪分析'),
+        ('message_merge', '消息合并'),
     ]
 
     # 预定义的提示词 key
@@ -72,6 +144,7 @@ class PromptLibrary(models.Model):
         'daily_planning': 'daily_planning_prompt',
         'autonomous_message': 'autonomous_message_prompt',
         'hotspot_judge': 'hotspot_judge_prompt',
+        'emotion_analysis': 'emotion_analysis_prompt',
     }
 
     user = models.ForeignKey(

@@ -8,7 +8,8 @@ from .models import (
     MemoryLibrary,
     PlannedTask,
     ReplyTask,
-    MessageRecord
+    MessageRecord,
+    EmotionRecord
 )
 
 
@@ -858,3 +859,94 @@ class MessageRecordAdmin(admin.ModelAdmin):
     def export_messages(self, request, queryset):
         # 简单提示，实际可以实现 CSV 导出
         self.message_user(request, f'选中了 {queryset.count()} 条消息')
+
+
+@admin.register(EmotionRecord)
+class EmotionRecordAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'emotion_badge', 'intensity_display', 'trigger_source', 'trigger_content_preview', 'created_at')
+    list_filter = ('user', 'emotion_type', 'trigger_source', 'created_at')
+    search_fields = ('description', 'trigger_content', 'user__username', 'user__nickname')
+    readonly_fields = ('created_at',)
+    list_per_page = 30
+    date_hierarchy = 'created_at'
+    raw_id_fields = ('user',)
+
+    fieldsets = (
+        ('用户信息', {
+            'fields': ('user',)
+        }),
+        ('情绪信息', {
+            'fields': ('emotion_type', 'intensity', 'description')
+        }),
+        ('触发信息', {
+            'fields': ('trigger_source', 'trigger_content'),
+        }),
+        ('元数据', {
+            'fields': ('metadata',),
+            'classes': ('collapse',)
+        }),
+        ('时间信息', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def emotion_badge(self, obj):
+        """显示情绪类型徽章"""
+        emotion_colors = {
+            'happy': '#4CAF50',
+            'sad': '#2196F3',
+            'angry': '#f44336',
+            'anxious': '#FF9800',
+            'calm': '#9E9E9E',
+            'excited': '#E91E63',
+            'tired': '#795548',
+            'neutral': '#607D8B',
+            'worried': '#FF5722',
+            'grateful': '#8BC34A',
+        }
+        emotion_icons = {
+            'happy': '😊',
+            'sad': '😢',
+            'angry': '😠',
+            'anxious': '😰',
+            'calm': '😌',
+            'excited': '🤩',
+            'tired': '😴',
+            'neutral': '😐',
+            'worried': '😟',
+            'grateful': '🙏',
+        }
+        color = emotion_colors.get(obj.emotion_type, '#9E9E9E')
+        icon = emotion_icons.get(obj.emotion_type, '')
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 3px 10px; '
+            'border-radius: 3px; font-size: 11px;">{} {}</span>',
+            color, icon, obj.get_emotion_type_display()
+        )
+    emotion_badge.short_description = '情绪类型'
+
+    def intensity_display(self, obj):
+        """可视化显示情绪强度"""
+        color = '#f44336' if obj.intensity >= 8 else '#FF9800' if obj.intensity >= 5 else '#4CAF50'
+        bars = '█' * obj.intensity + '░' * (10 - obj.intensity)
+        return format_html(
+            '<span style="color: {}; font-family: monospace;">{} ({})</span>',
+            color, bars, obj.intensity
+        )
+    intensity_display.short_description = '强度'
+
+    def trigger_content_preview(self, obj):
+        """触发内容预览"""
+        return truncate_text(obj.trigger_content, 50) if obj.trigger_content else '-'
+    trigger_content_preview.short_description = '触发内容'
+
+    actions = ['clear_old_emotions']
+
+    @admin.action(description='清除7天前的情绪记录')
+    def clear_old_emotions(self, request, queryset):
+        from django.utils import timezone
+        from datetime import timedelta
+        cutoff = timezone.now() - timedelta(days=7)
+        deleted = EmotionRecord.objects.filter(created_at__lt=cutoff).delete()[0]
+        self.message_user(request, f'成功删除 {deleted} 条旧情绪记录')

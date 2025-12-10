@@ -147,13 +147,23 @@ def _record_sent_message(task: ReplyTask):
     """
     try:
         context = task.context or {}
-        receiver = _determine_receiver(task)
+
+        # 确定接收者名称（用户名，而非用户ID）
+        if task.trigger_type == 'user':
+            # 用户触发的任务，使用原始发送者名称
+            receiver_name = context.get('sender', '')
+        else:
+            # 自主触发的任务，使用任务所属用户的用户名
+            receiver_name = task.user.username if task.user else ''
+
+        if not receiver_name:
+            receiver_name = '未知'
 
         MessageRecord.objects.create(
             user=task.user,  # 关联到任务所属用户
             message_type='sent',
             sender='我',  # 当前用户
-            receiver=str(receiver) if receiver else '未知',
+            receiver=receiver_name,
             content=task.content,
             timestamp=timezone.now(),
             reply_task=task,

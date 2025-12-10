@@ -21,6 +21,16 @@ urlpatterns = [
     # 消息记录
     path('messages/', views.list_messages, name='list_messages'),
 
+    # 情绪管理
+    path('emotions/', views.list_emotions, name='list_emotions'),
+    path('emotions/status/', views.get_emotion_status, name='get_emotion_status'),
+    path('emotions/record/', views.manual_emotion_record, name='manual_emotion_record'),
+
+    # 用户初始化
+    path('user/init/presets/', views.get_character_presets, name='get_character_presets'),
+    path('user/init/status/', views.check_user_init_status, name='check_user_init_status'),
+    path('user/init/complete/', views.complete_user_initialization, name='complete_user_initialization'),
+
     # Webhook API
     path('webhook/incoming/', views.webhook_incoming, name='webhook_incoming'),
     path('webhook/send/', views.webhook_send, name='webhook_send'),

@@ -231,27 +231,41 @@ def execute_pending_reply_tasks():
 
     阶段4：回复任务触发与发送
     1. 触发：回复任务计划触发
-    2. 如果同一用户有多条待发送消息，通过AI整合为一条
-    3. 执行：发送消息（从回复任务库）
-    4. 记录：发送的消息 → 写入消息记录库
+    2. 如果有到期任务，同时获取10分钟内的任务一起整合发送
+    3. 如果同一用户有多条待发送消息，通过AI整合为一条
+    4. 执行：发送消息（从回复任务库）
+    5. 记录：发送的消息 → 写入消息记录库
     """
     try:
         from core.models import ReplyTask, MessageRecord
         from django.utils import timezone
         from django.db import transaction
         from collections import defaultdict
+        from datetime import timedelta
 
-        # 查找到期的待执行任务（所有用户）
         now = timezone.now()
 
         # 使用数据库事务和行级锁防止重复执行
         with transaction.atomic():
-            # select_for_update + skip_locked: 锁定行，跳过已被锁定的行
-            pending_tasks = list(ReplyTask.objects.select_for_update(skip_locked=True).filter(
+            # 首先检查是否有到期的任务
+            has_due_tasks = ReplyTask.objects.filter(
                 status='pending',
                 scheduled_time__lte=now,
                 user__is_active=True
-            ).select_related('user').order_by('scheduled_time')[:20])
+            ).exists()
+
+            if not has_due_tasks:
+                return
+
+            # 有到期任务，则获取10分钟内的所有待执行任务
+            ten_minutes_later = now + timedelta(minutes=10)
+
+            # select_for_update + skip_locked: 锁定行，跳过已被锁定的行
+            pending_tasks = list(ReplyTask.objects.select_for_update(skip_locked=True).filter(
+                status='pending',
+                scheduled_time__lte=ten_minutes_later,
+                user__is_active=True
+            ).select_related('user').order_by('scheduled_time'))
 
             if not pending_tasks:
                 return
@@ -296,6 +310,7 @@ def _execute_user_tasks(user, tasks, webhook, ai_service):
         ai_service: AI 服务
     """
     from core.models import MessageRecord
+    from core.services.context_service import ContextService
     from django.utils import timezone
 
     if not webhook.enabled:
@@ -312,7 +327,10 @@ def _execute_user_tasks(user, tasks, webhook, ai_service):
     # 如果有多条消息，通过AI整合
     if len(messages) > 1:
         logger.info(f"用户 {user} 有 {len(messages)} 条待发送消息，正在整合...")
-        merged_content = ai_service.merge_messages(user, messages)
+        # 获取上下文（计划任务和情绪状态）
+        context_service = ContextService()
+        context = context_service.get_message_merge_context(user)
+        merged_content = ai_service.merge_messages(user, messages, context)
     else:
         merged_content = messages[0]
 

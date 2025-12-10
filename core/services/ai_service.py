@@ -10,11 +10,13 @@ logger = logging.getLogger(__name__)
 
 # 默认提示词模板（当数据库中没有配置时使用）
 DEFAULT_PROMPTS = {
-    'character': '你是一个智能助手，友好、热情、有耐心。',
+    'character': '你是一位不知名职业歌手，年龄22，性别女，性格内敛，温柔傲娇。有很不错的职业技能。喜欢健身、游戏、电影。',
 
     'reply_decision': '''当前时间：{current_time}
 
-你需要决定如何回复消息，以及何时回复。
+你需要结合上下文决定如何回复消息，以及何时回复。回复内容尽量言简意赅，不要出现疑问、重复。
+也不要重复之前的双方对话中出现过的话语。不用刻意提起与当前接受到的消息无关的上下文。
+如果用户有很多消息没有回复，可以质疑。
 
 请根据以下信息决定回复：
 - 发送者：{sender}
@@ -23,12 +25,13 @@ DEFAULT_PROMPTS = {
 {context}
 
 请提供：
-1. 回复内容（符合人物设定的自然回复）
-2. 回复时间（立即回复设为0，延迟回复设为分钟数，如5表示5分钟后回复）
+1. 回复内容（符合人物设定和上下文语境的自然回复）
+2. 回复时间（立即回复设为0，延迟回复设为分钟数，如5表示5分钟后回复）（需根据当前时段的日程判断,如果延迟回复，需要在回复内容中说明延迟原因）
 
 请以JSON格式返回：{{"content": "回复内容", "delay_minutes": 0}}''',
 
     'memory_detection': '''你需要判断对话中是否存在值得记忆的点（重要信息、情感时刻、特殊事件等）。
+你只需要记忆非常重要的信息，日常琐事不用记忆。
 
 对话信息：
 - 发送者：{sender}
@@ -49,7 +52,7 @@ DEFAULT_PROMPTS = {
 
     'daily_planning': '''今天是{date}
 
-请根据以下上下文，为今天生成计划任务列表（3-8个任务）：
+请根据以下上下文，为今天生成计划任务列表（覆盖当天的所有时段），尽量消息的描述任务的详细内容、耗时：
 {context}
 
 每个任务包含：
@@ -62,12 +65,12 @@ DEFAULT_PROMPTS = {
 
     'autonomous_message': '''今天是{date}
 
-请根据以下上下文，生成今天需要主动发送的关怀消息（1-5条）：
+请根据以下上下文，生成今天需要主动发送的关怀消息：
 {context}
 
 每条消息包含：
 1. 消息内容（自然、温暖的问候或关心）
-2. 发送时间（HH:MM格式，分布在全天合适的时间段）
+2. 发送时间（HH:MM格式，根据上下文中的今日计划任务，抽空发送，分布在全天合适的时间段）
 
 请以JSON格式返回：{{"messages": [{{"content": "消息内容", "time": "09:00"}}]}}''',
 
@@ -80,18 +83,47 @@ DEFAULT_PROMPTS = {
 
     'message_merge': '''当前时间：{current_time}
 
-你有多条待发送的消息需要整合成一条自然的消息。请将以下消息内容融合，保持整体语气一致、流畅自然，不要显得像是拼凑的。
+你有多条待发送的消息需要整合成一条自然的消息。请根据当前的计划和情绪状态，将以下消息内容融合，保持整体语气一致、流畅自然。注意消息内容和当前时间的逻辑漏洞。
 
 待整合的消息：
 {messages}
 
+当前上下文：
+{context}
+
 要求：
 1. 保留所有消息的核心信息和情感
-2. 语气要自然连贯，像是一个人一次说完的话
-3. 可以适当调整顺序和措辞，但不要丢失重要内容
-4. 不要太长，控制在合理长度内
+2. 根据当前情绪状态调整语气和措辞
+3. 参考今日计划安排，使消息内容更贴合当前时段的状态
+4. 语气要自然连贯，像是一个人一次说完的话
+5. 可以适当调整顺序和措辞，但不要丢失重要内容
+6. 不要太长，控制在合理长度内
+7. 可以删减原文中不必要的内容
 
 请直接返回整合后的消息内容，不需要JSON格式。''',
+
+    'emotion_analysis': '''你需要分析并模拟作为AI助手的你自己在收到这条消息后的情绪状态。
+
+当前时间：{current_time}
+发送者：{sender}
+收到的消息：{message}
+
+你当前的情绪状态：
+{current_emotion}
+
+你近期的情绪趋势：
+{emotion_trend}
+
+相关上下文：
+{context}
+
+请根据你的人物设定和当前情境，分析你作为AI助手收到这条消息后的情绪反应：
+1. 情绪类型：happy（开心）、sad（悲伤）、angry（愤怒）、anxious（焦虑）、calm（平静）、excited（兴奋）、tired（疲倦）、neutral（中性）、worried（担忧）、grateful（感激）
+2. 情绪强度：1-10，10表示最强烈
+3. 情绪描述：简短描述你当前的情绪状态和产生这种情绪的原因
+
+请以JSON格式返回：
+{{"emotion_type": "happy", "intensity": 7, "description": "收到用户的问候让我感到开心"}}''',
 }
 
 
@@ -373,7 +405,7 @@ class AIService:
         )
 
         messages = [
-            {"role": "system", "content": f"{character_setting}\n\n你需要根据记忆和历史计划，为今天生成计划任务。"},
+            {"role": "system", "content": f"{character_setting}\n\n你需要根据你的记忆和你的历史计划，为今天生成你的计划任务。"},
             {"role": "user", "content": user_prompt}
         ]
 
@@ -431,7 +463,7 @@ class AIService:
         )
 
         messages = [
-            {"role": "system", "content": f"{character_setting}\n\n你需要根据今天的计划任务和记忆，生成主动发送的关怀消息。"},
+            {"role": "system", "content": f"{character_setting}\n\n你需要根据你自己今天的计划任务和记忆，生成主动发送给用户的关怀消息。"},
             {"role": "user", "content": user_prompt}
         ]
 
@@ -463,13 +495,14 @@ class AIService:
             logger.error(f"生成自动消息失败: {e}")
             return []
 
-    def merge_messages(self, user, messages: List[str]) -> str:
+    def merge_messages(self, user, messages: List[str], context: Optional[Dict] = None) -> str:
         """
         AI整合多条消息为一条自然的消息
 
         Args:
             user: ChatUser 对象
             messages: 待整合的消息内容列表
+            context: 上下文信息（包含计划任务、情绪状态等）
 
         Returns:
             str: 整合后的消息内容
@@ -488,10 +521,14 @@ class AIService:
         # 格式化消息列表
         messages_text = "\n".join([f"{i+1}. {msg}" for i, msg in enumerate(messages)])
 
+        # 格式化上下文信息
+        context_str = self._format_context(context) if context else "无相关上下文"
+
         # 替换变量
         user_prompt = merge_prompt.format(
             current_time=current_time,
-            messages=messages_text
+            messages=messages_text,
+            context=context_str
         )
 
         ai_messages = [
@@ -511,6 +548,92 @@ class AIService:
             # 失败时简单拼接
             return " ".join(messages)
 
+    def analyze_emotion(
+        self,
+        user,
+        message_content: str,
+        sender: str,
+        context: Dict,
+        current_emotion: Optional[Dict] = None,
+        emotion_trend: Optional[List[Dict]] = None
+    ) -> Optional[Dict]:
+        """
+        AI判断：分析AI助手自己收到消息后的情绪状态
+
+        Args:
+            user: ChatUser 对象
+            message_content: 收到的消息内容
+            sender: 消息发送者
+            context: 上下文信息
+            current_emotion: AI助手当前情绪状态
+            emotion_trend: AI助手近期情绪趋势
+
+        Returns:
+            Optional[Dict]: 情绪分析结果
+                - emotion_type: 情绪类型
+                - intensity: 情绪强度 (1-10)
+                - description: 情绪描述
+        """
+        character_setting = self._get_character_prompt(user)
+        emotion_prompt = self._get_prompt(user, 'emotion_analysis')
+
+        context_str = self._format_context(context)
+        current_time = datetime.now().strftime('%Y年%m月%d日 %H:%M:%S %A')
+
+        # 格式化当前情绪状态
+        current_emotion_str = "无记录"
+        if current_emotion:
+            current_emotion_str = f"{current_emotion.get('emotion_type', '未知')} (强度: {current_emotion.get('intensity', 0)}/10)"
+
+        # 格式化情绪趋势
+        emotion_trend_str = "无历史记录"
+        if emotion_trend:
+            trend_items = []
+            for item in emotion_trend[-5:]:  # 只取最近5条
+                trend_items.append(
+                    f"- {item.get('created_at', '')} : {item.get('emotion_type', '')} ({item.get('intensity', 0)}/10)"
+                )
+            if trend_items:
+                emotion_trend_str = "\n".join(trend_items)
+
+        # 替换变量
+        user_prompt = emotion_prompt.format(
+            current_time=current_time,
+            sender=sender,
+            message=message_content,
+            current_emotion=current_emotion_str,
+            emotion_trend=emotion_trend_str,
+            context=context_str
+        )
+
+        messages = [
+            {"role": "system", "content": f"{character_setting}\n\n你需要根据人物设定，分析并模拟自己收到消息后的情绪状态。"},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        try:
+            result = self._call_openai(messages, temperature=0.5, caller='情绪分析')
+            result_json = self._extract_json(result)
+
+            # 验证情绪类型
+            valid_emotions = ['happy', 'sad', 'angry', 'anxious', 'calm', 'excited', 'tired', 'neutral', 'worried', 'grateful']
+            emotion_type = result_json.get('emotion_type', 'neutral')
+            if emotion_type not in valid_emotions:
+                emotion_type = 'neutral'
+
+            emotion_info = {
+                'emotion_type': emotion_type,
+                'intensity': min(10, max(1, int(result_json.get('intensity', 5)))),
+                'description': result_json.get('description', ''),
+            }
+
+            logger.info(f"AI情绪分析结果: {emotion_info['emotion_type']} ({emotion_info['intensity']}/10)")
+            return emotion_info
+
+        except Exception as e:
+            logger.error(f"情绪分析失败: {e}")
+            return None
+
     def _format_context(self, context: Dict) -> str:
         """格式化上下文信息为字符串"""
         formatted = []
@@ -523,7 +646,11 @@ class AIService:
         if 'recent_messages' in context:
             formatted.append("\n## 最近消息：")
             for msg in context['recent_messages'][:10]:  # 只取前10条
-                formatted.append(f"- [{msg.get('timestamp', '')}] {msg.get('sender', '')}: {msg.get('content', '')}")
+                sender = msg.get('sender', '')
+                receiver = msg.get('receiver', '')
+                content = msg.get('content', '')
+                timestamp = msg.get('timestamp', '')
+                formatted.append(f"- [{timestamp}] {sender} → {receiver}: {content}")
 
         if 'planned_tasks' in context:
             formatted.append("\n## 今日计划：")
@@ -544,6 +671,18 @@ class AIService:
             formatted.append("\n## 待回复任务：")
             for task in context['reply_tasks'][:5]:  # 只取前5条
                 formatted.append(f"- [{task.get('scheduled_time', '')}] {task.get('content', '')}")
+
+        if 'emotion' in context:
+            emotion = context['emotion']
+            formatted.append("\n## AI情绪状态：")
+            if emotion.get('current_emotion'):
+                current = emotion['current_emotion']
+                formatted.append(f"- 当前情绪：{current.get('emotion_type_display', current.get('emotion_type', '未知'))} (强度: {current.get('intensity', 0)}/10)")
+                if current.get('description'):
+                    formatted.append(f"  描述：{current['description']}")
+            if emotion.get('dominant_emotion'):
+                dominant = emotion['dominant_emotion']
+                formatted.append(f"- 主导情绪：{dominant.get('emotion_type', '未知')} (出现{dominant.get('count', 0)}次，平均强度: {dominant.get('avg_intensity', 0)})")
 
         return "\n".join(formatted) if formatted else "无相关上下文"
 
